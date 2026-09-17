@@ -78,6 +78,33 @@ object FormulaEngine {
 
     fun cellKey(row: Int, col: Int): String = "${columnLabel(col)}${row + 1}"
 
+    fun isCellRef(text: String): Boolean {
+        val letters = text.takeWhile { it.isLetter() }
+        val digits = text.dropWhile { it.isLetter() }
+        return letters.isNotEmpty() && digits.isNotEmpty() && digits.all { it.isDigit() }
+    }
+
+    /** "A1:B3" -> liste des cellules, ligne par ligne. */
+    fun expandRange(range: String): List<String> {
+        val parts = range.uppercase(Locale.ROOT).replace(" ", "").split(":")
+        if (parts.any { !isCellRef(it) }) return emptyList()
+        if (parts.size == 1) return listOf(parts[0])
+        if (parts.size != 2) return emptyList()
+
+        val firstColumn = columnIndex(parts[0].takeWhile { it.isLetter() })
+        val firstRow = parts[0].dropWhile { it.isLetter() }.toInt() - 1
+        val lastColumn = columnIndex(parts[1].takeWhile { it.isLetter() })
+        val lastRow = parts[1].dropWhile { it.isLetter() }.toInt() - 1
+
+        val out = ArrayList<String>()
+        for (r in minOf(firstRow, lastRow)..maxOf(firstRow, lastRow)) {
+            for (c in minOf(firstColumn, lastColumn)..maxOf(firstColumn, lastColumn)) {
+                out.add(cellKey(r, c))
+            }
+        }
+        return out
+    }
+
     /** Somme/moyenne/compte rapides sur une liste de cellules (barre de statut). */
     fun quickStats(refs: List<String>, cells: Map<String, String>): Triple<Double, Double, Int> {
         val numbers = refs.mapNotNull { ref ->

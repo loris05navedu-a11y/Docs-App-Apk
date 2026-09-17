@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.FormatColorText
 import androidx.compose.material.icons.filled.FormatItalic
 import androidx.compose.material.icons.filled.Functions
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Divider
 import androidx.compose.material3.DropdownMenu
@@ -110,6 +111,7 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
     var showRename by remember { mutableStateOf(false) }
     var showOpen by remember { mutableStateOf(false) }
     var showClearAll by remember { mutableStateOf(false) }
+    var showChart by remember { mutableStateOf(false) }
     var savedMessage by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(selected) { editing = cells[selected] ?: "" }
@@ -294,6 +296,10 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     ToolToggle(Icons.Filled.Functions, "Insérer une fonction") { showFunctions = true }
+                    ToolToggle(Icons.Filled.PieChart, "Créer un graphique") {
+                        commitEdit()
+                        showChart = true
+                    }
                     ToolToggle(Icons.Filled.FormatBold, "Gras", format.bold) {
                         updateFormat { it.copy(bold = !it.bold) }
                     }
@@ -355,6 +361,18 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                 }
             }
         }
+    }
+
+    if (showChart) {
+        val lastUsedRow = (0 until rows).lastOrNull { r ->
+            (0 until columns).any { c -> cells[FormulaEngine.cellKey(r, c)]?.isNotBlank() == true }
+        } ?: 5
+        ChartDialog(
+            cells = cells,
+            initialLabelsRange = "A1:A${lastUsedRow + 1}",
+            initialValuesRange = "B1:B${lastUsedRow + 1}",
+            onDismiss = { showChart = false }
+        )
     }
 
     if (showFunctions) {

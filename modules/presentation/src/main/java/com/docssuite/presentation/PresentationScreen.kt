@@ -1,5 +1,17 @@
 package com.docssuite.presentation
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,6 +34,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Animation
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -64,6 +77,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -91,8 +105,21 @@ private data class Slide(
     val titleSize: Int = 32,
     val contentSize: Int = 20,
     val align: Int = 1,
-    val fontIndex: Int = 0
+    val fontIndex: Int = 0,
+    val transition: Int = 1
 )
+
+private val TransitionNames = listOf(
+    "Aucune",
+    "Fondu",
+    "Glissement",
+    "Zoom avant",
+    "Glissement vertical",
+    "Zoom arrière"
+)
+
+private fun transitionName(index: Int): String =
+    TransitionNames.getOrElse(index) { TransitionNames[0] }
 
 private data class DeckTheme(val label: String, val background: Long, val text: Long)
 
@@ -132,6 +159,8 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
     var colorTargetIsBackground by remember { mutableStateOf(true) }
     var fontTargetIndex by remember { mutableStateOf(-1) }
     var sizeTargetIndex by remember { mutableStateOf(-1) }
+    var transitionTargetIndex by remember { mutableStateOf(-1) }
+    var showAllTransitions by remember { mutableStateOf(false) }
 
     fun deckAsText(): String = slides.mapIndexed { index, slide ->
         "— Slide ${index + 1} —\n${slide.title}\n${slide.content}"
@@ -212,6 +241,10 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
                                 text = { Text("Appliquer un thème") },
                                 onClick = { showMenu = false; showThemes = true }
                             )
+                            DropdownMenuItem(
+                                text = { Text("Transition pour toutes les slides") },
+                                onClick = { showMenu = false; showAllTransitions = true }
+                            )
                             Divider()
                             DropdownMenuItem(
                                 text = { Text("Partager le texte") },
@@ -270,7 +303,8 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
                     onPickBackground = { colorTargetIndex = index; colorTargetIsBackground = true },
                     onPickTextColor = { colorTargetIndex = index; colorTargetIsBackground = false },
                     onPickFont = { fontTargetIndex = index },
-                    onPickSize = { sizeTargetIndex = index }
+                    onPickSize = { sizeTargetIndex = index },
+                    onPickTransition = { transitionTargetIndex = index }
                 )
             }
         }
@@ -337,6 +371,39 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
                 sizeTargetIndex = -1
             },
             onDismiss = { sizeTargetIndex = -1 }
+        )
+    }
+
+    if (transitionTargetIndex >= 0) {
+        val index = transitionTargetIndex
+        ListPickerDialog(
+            title = "Transition de la slide ${index + 1}",
+            items = TransitionNames,
+            label = { it },
+            selected = TransitionNames.getOrNull(slides.getOrNull(index)?.transition ?: 0),
+            onPick = { name ->
+                if (index < slides.size) {
+                    slides[index] = slides[index].copy(transition = TransitionNames.indexOf(name))
+                }
+                transitionTargetIndex = -1
+            },
+            onDismiss = { transitionTargetIndex = -1 }
+        )
+    }
+
+    if (showAllTransitions) {
+        ListPickerDialog(
+            title = "Transition pour toutes les slides",
+            items = TransitionNames,
+            label = { it },
+            onPick = { name ->
+                val kind = TransitionNames.indexOf(name)
+                for (i in slides.indices) {
+                    slides[i] = slides[i].copy(transition = kind)
+                }
+                showAllTransitions = false
+            },
+            onDismiss = { showAllTransitions = false }
         )
     }
 
@@ -414,7 +481,8 @@ private fun SlideEditorCard(
     onPickBackground: () -> Unit,
     onPickTextColor: () -> Unit,
     onPickFont: () -> Unit,
-    onPickSize: () -> Unit
+    onPickSize: () -> Unit,
+    onPickTransition: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(18.dp),
@@ -461,6 +529,12 @@ private fun SlideEditorCard(
                     color = Color(slide.textColor).copy(alpha = 0.6f),
                     fontSize = 11.sp
                 )
+                Text(
+                    transitionName(slide.transition),
+                    modifier = Modifier.align(Alignment.TopStart),
+                    color = Color(slide.textColor).copy(alpha = 0.6f),
+                    fontSize = 11.sp
+                )
             }
 
             Column(modifier = Modifier.padding(12.dp)) {
@@ -502,6 +576,9 @@ private fun SlideEditorCard(
                             tint = MaterialTheme.colorScheme.primary
                         )
                     }
+                    IconButton(onClick = onPickTransition) {
+                        Icon(Icons.Filled.Animation, contentDescription = "Transition")
+                    }
                     IconButton(onClick = onMoveUp, enabled = index > 0) {
                         Icon(Icons.Filled.ArrowUpward, contentDescription = "Monter")
                     }
@@ -524,10 +601,28 @@ private fun SlideEditorCard(
     }
 }
 
+private fun transitionFor(kind: Int, forward: Boolean): ContentTransform {
+    val spec = tween<Float>(durationMillis = 420)
+    val slideSpec = tween<IntOffset>(durationMillis = 420)
+    return when (kind) {
+        1 -> fadeIn(spec) togetherWith fadeOut(spec)
+        2 -> (slideInHorizontally(slideSpec) { width -> if (forward) width else -width } + fadeIn(spec)) togetherWith
+            (slideOutHorizontally(slideSpec) { width -> if (forward) -width else width } + fadeOut(spec))
+        3 -> (scaleIn(spec, initialScale = 0.75f) + fadeIn(spec)) togetherWith
+            (scaleOut(spec, targetScale = 1.2f) + fadeOut(spec))
+        4 -> (slideInVertically(slideSpec) { height -> if (forward) height else -height } + fadeIn(spec)) togetherWith
+            (slideOutVertically(slideSpec) { height -> if (forward) -height else height } + fadeOut(spec))
+        5 -> (scaleIn(spec, initialScale = 1.25f) + fadeIn(spec)) togetherWith
+            (scaleOut(spec, targetScale = 0.8f) + fadeOut(spec))
+        else -> fadeIn(tween(1)) togetherWith fadeOut(tween(1))
+    }
+}
+
 /** Diaporama plein écran : clic à droite = slide suivante, à gauche = précédente. */
 @Composable
 private fun SlideShow(slides: List<Slide>, onExit: () -> Unit) {
     var index by remember { mutableStateOf(0) }
+    var forward by remember { mutableStateOf(true) }
     val slide = slides.getOrNull(index) ?: return
 
     Dialog(
@@ -541,37 +636,60 @@ private fun SlideShow(slides: List<Slide>, onExit: () -> Unit) {
                 .pointerInput(slides.size) {
                     detectTapGestures { offset ->
                         if (offset.x > size.width / 2) {
-                            if (index < slides.size - 1) index++ else onExit()
-                        } else {
-                            if (index > 0) index--
+                            if (index < slides.size - 1) {
+                                forward = true
+                                index++
+                            } else {
+                                onExit()
+                            }
+                        } else if (index > 0) {
+                            forward = false
+                            index--
                         }
                     }
                 }
         ) {
-            Column(
-                modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 64.dp),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = alignmentFor(slide.align)
-            ) {
-                Text(
-                    slide.title,
-                    color = Color(slide.textColor),
-                    fontSize = slide.titleSize.sp,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = textAlignFor(slide.align),
-                    style = TextStyle(fontFamily = fontFamilyAt(slide.fontIndex)),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                if (slide.content.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(24.dp))
-                    Text(
-                        slide.content,
-                        color = Color(slide.textColor).copy(alpha = 0.9f),
-                        fontSize = slide.contentSize.sp,
-                        textAlign = textAlignFor(slide.align),
-                        style = TextStyle(fontFamily = fontFamilyAt(slide.fontIndex)),
-                        modifier = Modifier.fillMaxWidth()
-                    )
+            AnimatedContent(
+                targetState = index,
+                transitionSpec = {
+                    transitionFor(slides.getOrNull(targetState)?.transition ?: 1, forward)
+                },
+                label = "slide"
+            ) { slideIndex ->
+                val current = slides.getOrNull(slideIndex) ?: return@AnimatedContent
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(current.background))
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 32.dp, vertical = 64.dp),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = alignmentFor(current.align)
+                    ) {
+                        Text(
+                            current.title,
+                            color = Color(current.textColor),
+                            fontSize = current.titleSize.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = textAlignFor(current.align),
+                            style = TextStyle(fontFamily = fontFamilyAt(current.fontIndex)),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        if (current.content.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(24.dp))
+                            Text(
+                                current.content,
+                                color = Color(current.textColor).copy(alpha = 0.9f),
+                                fontSize = current.contentSize.sp,
+                                textAlign = textAlignFor(current.align),
+                                style = TextStyle(fontFamily = fontFamilyAt(current.fontIndex)),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
                 }
             }
 
@@ -639,6 +757,7 @@ private fun encodeDeck(slides: List<Slide>): String {
             put("cs", slide.contentSize)
             put("al", slide.align)
             put("fi", slide.fontIndex)
+            put("tr", slide.transition)
         })
     }
     return JSONObject().apply { put("slides", array) }.toString()
@@ -658,7 +777,8 @@ private fun decodeDeck(payload: String): List<Slide> {
                 titleSize = o.optInt("ts", 32),
                 contentSize = o.optInt("cs", 20),
                 align = o.optInt("al", 1),
-                fontIndex = o.optInt("fi", 0)
+                fontIndex = o.optInt("fi", 0),
+                transition = o.optInt("tr", 1)
             )
         )
     }
