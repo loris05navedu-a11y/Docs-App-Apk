@@ -78,6 +78,8 @@
     <string msgid="994099543833979061" name="time_picker_minute_text_field">"(minūtes)"</string>
     <string msgid="7352665290700284516" name="time_picker_period_toggle_description">"Atlasīt “AM” (priekšpusdienā) vai “PM” (pēcpusdienā)"</string>
     <string msgid="2232702812657998674" name="time_picker_pm">"PM"</string>
+    <string msgid="3765533235322692011" name="tooltip_description">"rīka padoms"</string>
+    <string msgid="3124740595719787496" name="tooltip_label">"rādīt rīka padomu"</string>
     <string msgid="2732804537909054941" name="tooltip_long_press_label">"Rādīt rīka padomu"</string>
     <string msgid="8191239805703103845" name="tooltip_pane_description">"Rīka padoms"</string>
 </resources>

@@ -78,6 +78,8 @@
     <string msgid="994099543833979061" name="time_picker_minute_text_field">"기간(분)"</string>
     <string msgid="7352665290700284516" name="time_picker_period_toggle_description">"오전 또는 오후를 선택하세요."</string>
     <string msgid="2232702812657998674" name="time_picker_pm">"오후"</string>
+    <string msgid="3765533235322692011" name="tooltip_description">"도움말"</string>
+    <string msgid="3124740595719787496" name="tooltip_label">"도움말 표시"</string>
     <string msgid="2732804537909054941" name="tooltip_long_press_label">"도움말 표시"</string>
     <string msgid="8191239805703103845" name="tooltip_pane_description">"도움말"</string>
 </resources>

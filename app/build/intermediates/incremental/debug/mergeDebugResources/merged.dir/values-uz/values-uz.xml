@@ -78,6 +78,8 @@
     <string msgid="994099543833979061" name="time_picker_minute_text_field">"bir daqiqa"</string>
     <string msgid="7352665290700284516" name="time_picker_period_toggle_description">"Tushdan oldin yoki keyinligini tanlang"</string>
     <string msgid="2232702812657998674" name="time_picker_pm">"TK"</string>
+    <string msgid="3765533235322692011" name="tooltip_description">"qalqib chiquvchi maslahat oynasi"</string>
+    <string msgid="3124740595719787496" name="tooltip_label">"maslahat oynasini koʻrsatish"</string>
     <string msgid="2732804537909054941" name="tooltip_long_press_label">"Maslahat oynasini koʻrsatish"</string>
     <string msgid="8191239805703103845" name="tooltip_pane_description">"Maslahat oynasi"</string>
 </resources>

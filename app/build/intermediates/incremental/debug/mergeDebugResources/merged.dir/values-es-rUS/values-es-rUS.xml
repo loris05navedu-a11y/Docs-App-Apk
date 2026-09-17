@@ -78,6 +78,8 @@
     <string msgid="994099543833979061" name="time_picker_minute_text_field">"por minutos"</string>
     <string msgid="7352665290700284516" name="time_picker_period_toggle_description">"Selecciona a.m. o p.m."</string>
     <string msgid="2232702812657998674" name="time_picker_pm">"p.m."</string>
+    <string msgid="3765533235322692011" name="tooltip_description">"cuadro de información"</string>
+    <string msgid="3124740595719787496" name="tooltip_label">"mostrar cuadro de información"</string>
     <string msgid="2732804537909054941" name="tooltip_long_press_label">"Mostrar información"</string>
     <string msgid="8191239805703103845" name="tooltip_pane_description">"Información"</string>
 </resources>

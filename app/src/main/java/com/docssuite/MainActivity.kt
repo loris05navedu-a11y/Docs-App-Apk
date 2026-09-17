@@ -3,39 +3,39 @@ package com.docssuite
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import com.docssuite.presentation.PresentationScreen
+import com.docssuite.spreadsheet.SpreadsheetScreen
+import com.docssuite.texteditor.TextEditorScreen
+import com.docssuite.ui.theme.DocsSuiteTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MainScreen()
+            DocsSuiteTheme {
+                DocsSuiteApp()
+            }
         }
     }
 }
 
 @Composable
-fun MainScreen() {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text("Bienvenue dans DocsApp Suite")
-        Spacer(modifier = Modifier.height(16.dp))
-        Button(onClick = { }) { Text("Éditeur de Texte") }
-        Button(onClick = { }) { Text("Tableur") }
-        Button(onClick = { }) { Text("Présentation") }
+fun DocsSuiteApp() {
+    val navController = rememberNavController()
+    NavHost(navController = navController, startDestination = "home") {
+        composable("home") {
+            HomeScreen(
+                onOpenTextEditor = { navController.navigate("text_editor") },
+                onOpenSpreadsheet = { navController.navigate("spreadsheet") },
+                onOpenPresentation = { navController.navigate("presentation") }
+            )
+        }
+        composable("text_editor") { TextEditorScreen(onBack = { navController.popBackStack() }) }
+        composable("spreadsheet") { SpreadsheetScreen(onBack = { navController.popBackStack() }) }
+        composable("presentation") { PresentationScreen(onBack = { navController.popBackStack() }) }
     }
 }
