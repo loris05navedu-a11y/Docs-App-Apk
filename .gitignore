@@ -1,0 +1,33 @@
+# Gradle
+.gradle/
+gradle-bin/
+build/
+*.apk
+*.aar
+
+# Android Studio
+.idea/
+*.iml
+*.iws
+*.ipr
+.DS_Store
+
+# Local configuration file (sdk path, etc)
+local.properties
+
+# Kotlin
+*.kotlin_module
+
+# Generated files
+gen/
+out/
+
+# Backup files
+*~
+*.swp
+*.swo
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
