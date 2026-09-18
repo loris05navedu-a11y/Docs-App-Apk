@@ -137,12 +137,22 @@ fun ChartDialog(
                     )
                 }
 
+                if (type == ChartType.BOXPLOT) {
+                    Text(
+                        "Répète le même libellé en colonne A pour comparer plusieurs " +
+                            "groupes ; sinon toute la série forme une seule boîte.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 12.dp)
+                    )
+                }
+
                 if (entries.isNotEmpty()) {
                     Text(
                         "${entries.size} valeur(s) lue(s) dans $valuesRange",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 12.dp)
+                        modifier = Modifier.padding(top = 4.dp)
                     )
                 }
             }

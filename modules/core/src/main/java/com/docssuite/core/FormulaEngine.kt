@@ -18,8 +18,23 @@ object FormulaEngine {
 
     val FUNCTIONS = listOf(
         "SOMME", "MOYENNE", "MIN", "MAX", "NB", "PRODUIT", "MEDIANE",
-        "ABS", "ARRONDI", "RACINE", "PUISSANCE", "SI", "ENT", "MOD", "LOG", "EXP"
+        "QUARTILE", "ECARTYPE", "ABS", "ARRONDI", "RACINE", "PUISSANCE",
+        "SI", "ENT", "MOD", "LOG", "EXP"
     )
+
+    /**
+     * Évalue une expression libre (calculatrice). Les références de cellules
+     * sont résolues si [cells] est fourni. Renvoie null si l'expression est invalide.
+     */
+    fun evaluateExpression(expression: String, cells: Map<String, String> = emptyMap()): Double? {
+        val cleaned = expression.trim().removePrefix("=").trim()
+        if (cleaned.isEmpty()) return null
+        return try {
+            Parser(cleaned, cells, HashSet()).parse().takeIf { it.isFinite() }
+        } catch (e: Exception) {
+            null
+        }
+    }
 
     /** Valeur affichée d'une cellule (évalue la formule si elle commence par "="). */
     fun displayValue(ref: String, cells: Map<String, String>): String {
@@ -315,6 +330,17 @@ private class Parser(
             if (args.isEmpty()) 0.0 else {
                 val s = args.sorted()
                 if (s.size % 2 == 1) s[s.size / 2] else (s[s.size / 2 - 1] + s[s.size / 2]) / 2
+            }
+        }
+        "QUARTILE" -> {
+            // Même ordre d'arguments qu'Excel : QUARTILE(plage; n) avec n de 0 à 4.
+            val rank = args.last().toInt().coerceIn(0, 4)
+            quantile(args.dropLast(1).sorted(), rank / 4.0)
+        }
+        "ECARTYPE", "STDEV" -> {
+            if (args.size < 2) 0.0 else {
+                val mean = args.sum() / args.size
+                sqrt(args.sumOf { (it - mean) * (it - mean) } / (args.size - 1))
             }
         }
         "ABS" -> abs(args.first())

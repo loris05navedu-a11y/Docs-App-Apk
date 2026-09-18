@@ -53,10 +53,85 @@ enum class ChartType(val label: String) {
     COLUMN("Barres verticales"),
     BAR("Barres horizontales"),
     LINE("Courbe"),
-    AREA("Aires")
+    AREA("Aires"),
+    BOXPLOT("Boîte à moustaches")
 }
 
 data class ChartEntry(val label: String, val value: Double)
+
+/** Résumé à cinq nombres d'une série, plus les valeurs aberrantes (méthode de Tukey). */
+data class BoxStats(
+    val label: String,
+    val count: Int,
+    val min: Double,
+    val q1: Double,
+    val median: Double,
+    val q3: Double,
+    val max: Double,
+    val lowerWhisker: Double,
+    val upperWhisker: Double,
+    val outliers: List<Double>
+) {
+    val interquartileRange: Double get() = q3 - q1
+}
+
+/** Quantile par interpolation linéaire (même convention que QUARTILE d'Excel). */
+fun quantile(sortedValues: List<Double>, p: Double): Double {
+    if (sortedValues.isEmpty()) return 0.0
+    if (sortedValues.size == 1) return sortedValues[0]
+    val position = (sortedValues.size - 1) * p.coerceIn(0.0, 1.0)
+    val lower = floor(position).toInt()
+    val upper = ceil(position).toInt()
+    if (lower == upper) return sortedValues[lower]
+    return sortedValues[lower] + (position - lower) * (sortedValues[upper] - sortedValues[lower])
+}
+
+fun computeBoxStats(label: String, values: List<Double>): BoxStats? {
+    val sorted = values.filter { it.isFinite() }.sorted()
+    if (sorted.isEmpty()) return null
+
+    val q1 = quantile(sorted, 0.25)
+    val median = quantile(sorted, 0.5)
+    val q3 = quantile(sorted, 0.75)
+    val iqr = q3 - q1
+    val lowerFence = q1 - 1.5 * iqr
+    val upperFence = q3 + 1.5 * iqr
+
+    val inside = sorted.filter { it in lowerFence..upperFence }
+    val outliers = sorted.filter { it < lowerFence || it > upperFence }
+
+    return BoxStats(
+        label = label,
+        count = sorted.size,
+        min = sorted.first(),
+        q1 = q1,
+        median = median,
+        q3 = q3,
+        max = sorted.last(),
+        lowerWhisker = inside.minOrNull() ?: q1,
+        upperWhisker = inside.maxOrNull() ?: q3,
+        outliers = outliers
+    )
+}
+
+/**
+ * Une boîte par libellé quand les libellés se répètent (comparaison de groupes),
+ * sinon une seule boîte pour toute la série.
+ */
+fun buildBoxStats(entries: List<ChartEntry>): List<BoxStats> {
+    val usable = entries.filter { it.value.isFinite() }
+    if (usable.isEmpty()) return emptyList()
+
+    val groups = LinkedHashMap<String, MutableList<Double>>()
+    usable.forEach { groups.getOrPut(it.label) { ArrayList() }.add(it.value) }
+
+    val grouped = groups.size > 1 && groups.values.any { it.size > 1 }
+    return if (grouped) {
+        groups.entries.take(MAX_BOXES).mapNotNull { computeBoxStats(it.key, it.value) }
+    } else {
+        listOfNotNull(computeBoxStats("Série", usable.map { it.value }))
+    }
+}
 
 /**
  * Palette catégorielle validée (séparation daltonisme et contraste vérifiés
@@ -76,6 +151,8 @@ private val CategoricalDark = listOf(
 /** Au-delà, les secteurs deviennent illisibles : le reste est regroupé. */
 private const val MAX_PIE_SEGMENTS = 6
 private const val MAX_CATEGORIES = 14
+private const val MAX_BOXES = 8
+private const val MAX_TICKS = 20
 
 /** Construit les points du graphique à partir de deux plages de cellules. */
 fun buildChartEntries(
@@ -127,12 +204,20 @@ fun ChartView(
     val grid = MaterialTheme.colorScheme.outlineVariant
 
     val isPie = type == ChartType.PIE || type == ChartType.DONUT
+    val isBox = type == ChartType.BOXPLOT
     val data = remember(entries, isPie) {
         foldEntries(
             entries.filter { it.value.isFinite() },
             if (isPie) MAX_PIE_SEGMENTS else MAX_CATEGORIES
         )
     }
+    val boxes = remember(entries, isBox) {
+        if (isBox) buildBoxStats(entries) else emptyList()
+    }
+
+    // Une boîte à moustaches reste valable même si toutes les valeurs sont nulles :
+    // c'est une distribution, pas une magnitude.
+    val hasData = if (isBox) boxes.isNotEmpty() else data.isNotEmpty() && data.any { it.value != 0.0 }
 
     Column(modifier = modifier) {
         if (title.isNotBlank()) {
@@ -144,35 +229,80 @@ fun ChartView(
             )
         }
 
-        if (data.isEmpty() || data.all { it.value == 0.0 }) {
+        // Pas de retour anticipé ici : sortir d'un lambda composable en plein
+        // milieu casse la table de slots de Compose (plantage au rendu).
+        if (!hasData) {
             Text(
                 "Aucune valeur numérique dans la plage sélectionnée.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = textSecondary,
                 modifier = Modifier.padding(vertical = 24.dp)
             )
-            return@Column
-        }
+        } else {
+            val paint = remember { Paint().apply { isAntiAlias = true } }
 
-        val paint = remember { Paint().apply { isAntiAlias = true } }
-
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(if (isPie) 250.dp else 230.dp)
-                .padding(top = 12.dp)
-        ) {
-            when (type) {
-                ChartType.PIE -> drawPie(data, palette, surface, paint, textPrimary, donut = false)
-                ChartType.DONUT -> drawPie(data, palette, surface, paint, textPrimary, donut = true)
-                ChartType.COLUMN -> drawColumns(data, palette[0], surface, grid, paint, textSecondary, textPrimary)
-                ChartType.BAR -> drawBars(data, palette[0], surface, grid, paint, textSecondary, textPrimary)
-                ChartType.LINE -> drawLine(data, palette[0], surface, grid, paint, textSecondary, textPrimary, fill = false)
-                ChartType.AREA -> drawLine(data, palette[0], surface, grid, paint, textSecondary, textPrimary, fill = true)
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(if (isPie) 250.dp else 230.dp)
+                    .padding(top = 12.dp)
+            ) {
+                if (size.minDimension <= 0f) return@Canvas
+                when (type) {
+                    ChartType.PIE -> drawPie(data, palette, surface, paint, textPrimary, donut = false)
+                    ChartType.DONUT -> drawPie(data, palette, surface, paint, textPrimary, donut = true)
+                    ChartType.COLUMN -> drawColumns(data, palette[0], surface, grid, paint, textSecondary, textPrimary)
+                    ChartType.BAR -> drawBars(data, palette[0], surface, grid, paint, textSecondary, textPrimary)
+                    ChartType.LINE -> drawLine(data, palette[0], surface, grid, paint, textSecondary, textPrimary, fill = false)
+                    ChartType.AREA -> drawLine(data, palette[0], surface, grid, paint, textSecondary, textPrimary, fill = true)
+                    ChartType.BOXPLOT -> drawBoxPlot(boxes, palette[0], surface, grid, paint, textSecondary, textPrimary)
+                }
             }
-        }
 
-        if (isPie) {
+            ChartDataPanel(type, data, boxes, palette, textPrimary, textSecondary)
+        }
+    }
+}
+
+@Composable
+private fun ChartDataPanel(
+    type: ChartType,
+    data: List<ChartEntry>,
+    boxes: List<BoxStats>,
+    palette: List<Color>,
+    textPrimary: Color,
+    textSecondary: Color
+) {
+    val isPie = type == ChartType.PIE || type == ChartType.DONUT
+    Column(modifier = Modifier.padding(top = 12.dp)) {
+        if (type == ChartType.BOXPLOT) {
+            boxes.forEach { box ->
+                Column(modifier = Modifier.padding(bottom = 10.dp)) {
+                    Text(
+                        "${box.label}  ·  ${box.count} valeur(s)",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = textPrimary
+                    )
+                    Text(
+                        "Min ${FormulaEngine.formatNumber(box.min)}  ·  " +
+                            "Q1 ${FormulaEngine.formatNumber(box.q1)}  ·  " +
+                            "Médiane ${FormulaEngine.formatNumber(box.median)}  ·  " +
+                            "Q3 ${FormulaEngine.formatNumber(box.q3)}  ·  " +
+                            "Max ${FormulaEngine.formatNumber(box.max)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = textSecondary
+                    )
+                    if (box.outliers.isNotEmpty()) {
+                        Text(
+                            "Valeurs aberrantes : ${box.outliers.joinToString(", ") { FormulaEngine.formatNumber(it) }}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = textSecondary
+                        )
+                    }
+                }
+            }
+        } else if (isPie) {
             val total = data.sumOf { abs(it.value) }
             Column(
                 modifier = Modifier.padding(top = 12.dp),
@@ -264,10 +394,12 @@ private fun DrawScope.drawPie(
     textPrimary: Color,
     donut: Boolean
 ) {
+    if (data.isEmpty()) return
     val total = data.sumOf { abs(it.value) }
     if (total <= 0.0) return
 
     val radius = min(size.width, size.height) / 2f - 8.dp.toPx()
+    if (radius <= 0f) return
     val center = Offset(size.width / 2f, size.height / 2f)
     val gapDegrees = if (data.size > 1) (2.dp.toPx() / radius) * (180f / Math.PI.toFloat()) else 0f
     val ringWidth = radius * 0.42f
@@ -329,11 +461,13 @@ private fun DrawScope.drawColumns(
     textSecondary: Color,
     textPrimary: Color
 ) {
+    if (data.isEmpty()) return
     val leftPad = 46.dp.toPx()
     val bottomPad = 26.dp.toPx()
     val topPad = 14.dp.toPx()
     val plotWidth = size.width - leftPad - 8.dp.toPx()
     val plotHeight = size.height - bottomPad - topPad
+    if (plotWidth <= 0f || plotHeight <= 0f) return
 
     val maxValue = max(0.0, data.maxOf { it.value })
     val minValue = min(0.0, data.minOf { it.value })
@@ -382,12 +516,14 @@ private fun DrawScope.drawBars(
     textSecondary: Color,
     textPrimary: Color
 ) {
+    if (data.isEmpty()) return
     val leftPad = 76.dp.toPx()
     val rightPad = 40.dp.toPx()
     val topPad = 10.dp.toPx()
     val bottomPad = 20.dp.toPx()
     val plotWidth = size.width - leftPad - rightPad
     val plotHeight = size.height - topPad - bottomPad
+    if (plotWidth <= 0f || plotHeight <= 0f) return
 
     val maxValue = max(0.0, data.maxOf { it.value })
     val minValue = min(0.0, data.minOf { it.value })
@@ -395,13 +531,10 @@ private fun DrawScope.drawBars(
     fun xOf(v: Double): Float = leftPad + ((v - axis.min) / (axis.max - axis.min) * plotWidth).toFloat()
 
     // Grille verticale discrète
-    paint.textAlign = Paint.Align.CENTER
-    var tick = axis.min
-    while (tick <= axis.max + axis.step / 2) {
+    axis.forEachTick { tick ->
         val x = xOf(tick)
         drawLine(grid, Offset(x, topPad), Offset(x, topPad + plotHeight), strokeWidth = 1f)
         label(paint, formatTick(tick), x, size.height - 6.dp.toPx(), textSecondary, 10f)
-        tick += axis.step
     }
 
     val slot = plotHeight / data.size
@@ -451,11 +584,13 @@ private fun DrawScope.drawLine(
     textPrimary: Color,
     fill: Boolean
 ) {
+    if (data.isEmpty()) return
     val leftPad = 46.dp.toPx()
     val bottomPad = 26.dp.toPx()
     val topPad = 14.dp.toPx()
     val plotWidth = size.width - leftPad - 12.dp.toPx()
     val plotHeight = size.height - bottomPad - topPad
+    if (plotWidth <= 0f || plotHeight <= 0f) return
 
     val axis = niceAxis(min(0.0, data.minOf { it.value }), max(0.0, data.maxOf { it.value }))
     fun yOf(v: Double): Float =
@@ -509,6 +644,16 @@ private fun DrawScope.drawLine(
     }
 }
 
+/**
+ * Itère les graduations par index plutôt qu'en accumulant le pas : borné, et
+ * insensible aux pertes de précision qui pourraient figer la boucle.
+ */
+private inline fun Axis.forEachTick(action: (Double) -> Unit) {
+    if (!step.isFinite() || step <= 0.0 || !min.isFinite() || !max.isFinite()) return
+    val count = (((max - min) / step).toInt() + 1).coerceIn(1, MAX_TICKS)
+    for (i in 0 until count) action(min + step * i)
+}
+
 private fun DrawScope.drawGrid(
     axis: Axis,
     paint: Paint,
@@ -519,12 +664,128 @@ private fun DrawScope.drawGrid(
     plotWidth: Float,
     plotHeight: Float
 ) {
-    var tick = axis.min
-    while (tick <= axis.max + axis.step / 2) {
+    axis.forEachTick { tick ->
         val y = topPad + plotHeight - ((tick - axis.min) / (axis.max - axis.min) * plotHeight).toFloat()
         drawLine(grid, Offset(leftPad, y), Offset(leftPad + plotWidth, y), strokeWidth = 1f)
         label(paint, formatTick(tick), leftPad - 6.dp.toPx(), y + 4.dp.toPx(), textSecondary, 10f, Paint.Align.RIGHT)
-        tick += axis.step
+    }
+}
+
+/** Boîte à moustaches (Tukey) : boîte Q1–Q3, médiane, moustaches, points aberrants. */
+private fun DrawScope.drawBoxPlot(
+    boxes: List<BoxStats>,
+    boxColor: Color,
+    surface: Color,
+    grid: Color,
+    paint: Paint,
+    textSecondary: Color,
+    textPrimary: Color
+) {
+    if (boxes.isEmpty()) return
+
+    val leftPad = 46.dp.toPx()
+    val bottomPad = 26.dp.toPx()
+    val topPad = 14.dp.toPx()
+    val plotWidth = size.width - leftPad - 12.dp.toPx()
+    val plotHeight = size.height - topPad - bottomPad
+    if (plotWidth <= 0f || plotHeight <= 0f) return
+
+    val lowest = boxes.minOf { minOf(it.lowerWhisker, it.outliers.minOrNull() ?: it.min) }
+    val highest = boxes.maxOf { maxOf(it.upperWhisker, it.outliers.maxOrNull() ?: it.max) }
+    // Une distribution n'a pas à partir de zéro : l'axe cadre les valeurs réelles.
+    val axis = niceAxis(lowest, highest)
+    fun yOf(v: Double): Float =
+        topPad + plotHeight - ((v - axis.min) / (axis.max - axis.min) * plotHeight).toFloat()
+
+    drawGrid(axis, paint, grid, textSecondary, leftPad, topPad, plotWidth, plotHeight)
+
+    val slot = plotWidth / boxes.size
+    val boxWidth = min(56.dp.toPx(), slot - 16.dp.toPx()).coerceAtLeast(12.dp.toPx())
+    val whiskerCap = boxWidth / 2.5f
+
+    boxes.forEachIndexed { index, box ->
+        val cx = leftPad + slot * index + slot / 2
+
+        // Moustaches
+        drawLine(
+            boxColor,
+            Offset(cx, yOf(box.upperWhisker)),
+            Offset(cx, yOf(box.q3)),
+            strokeWidth = 2.dp.toPx(),
+            cap = StrokeCap.Round
+        )
+        drawLine(
+            boxColor,
+            Offset(cx, yOf(box.q1)),
+            Offset(cx, yOf(box.lowerWhisker)),
+            strokeWidth = 2.dp.toPx(),
+            cap = StrokeCap.Round
+        )
+        drawLine(
+            boxColor,
+            Offset(cx - whiskerCap, yOf(box.upperWhisker)),
+            Offset(cx + whiskerCap, yOf(box.upperWhisker)),
+            strokeWidth = 2.dp.toPx(),
+            cap = StrokeCap.Round
+        )
+        drawLine(
+            boxColor,
+            Offset(cx - whiskerCap, yOf(box.lowerWhisker)),
+            Offset(cx + whiskerCap, yOf(box.lowerWhisker)),
+            strokeWidth = 2.dp.toPx(),
+            cap = StrokeCap.Round
+        )
+
+        // Boîte interquartile
+        val boxTop = yOf(box.q3)
+        val boxBottom = yOf(box.q1)
+        drawPath(
+            Path().apply {
+                addRoundRect(
+                    RoundRect(
+                        left = cx - boxWidth / 2,
+                        top = min(boxTop, boxBottom),
+                        right = cx + boxWidth / 2,
+                        bottom = max(boxTop, boxBottom) + 1f,
+                        topLeftCornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+                        topRightCornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+                        bottomRightCornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+                        bottomLeftCornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+                    )
+                )
+            },
+            boxColor
+        )
+
+        // Médiane : trait dans la couleur du fond, il sépare sans ajouter d'encre.
+        drawLine(
+            surface,
+            Offset(cx - boxWidth / 2, yOf(box.median)),
+            Offset(cx + boxWidth / 2, yOf(box.median)),
+            strokeWidth = 2.dp.toPx()
+        )
+
+        // Valeurs aberrantes, avec anneau de surface pour rester lisibles.
+        box.outliers.forEach { outlier ->
+            val center = Offset(cx, yOf(outlier))
+            drawCircle(surface, radius = 6.dp.toPx(), center = center)
+            drawCircle(boxColor, radius = 4.dp.toPx(), center = center)
+        }
+
+        label(paint, ellipsize(box.label, 10), cx, size.height - 8.dp.toPx(), textSecondary, 11f)
+
+        if (boxes.size <= 4) {
+            label(
+                paint,
+                FormulaEngine.formatNumber(box.median),
+                cx + boxWidth / 2 + 6.dp.toPx(),
+                yOf(box.median) + 4.dp.toPx(),
+                textPrimary,
+                11f,
+                Paint.Align.LEFT,
+                bold = true
+            )
+        }
     }
 }
 

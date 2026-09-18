@@ -16,9 +16,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FormatAlignCenter
@@ -57,6 +60,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -112,6 +116,7 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
     var showOpen by remember { mutableStateOf(false) }
     var showClearAll by remember { mutableStateOf(false) }
     var showChart by remember { mutableStateOf(false) }
+    var showCalculator by remember { mutableStateOf(false) }
     var savedMessage by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(selected) { editing = cells[selected] ?: "" }
@@ -123,8 +128,18 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
         formats[selected] = transform(formats[selected] ?: CellFormat())
     }
 
-    fun commitEdit() {
+    fun commitEdit(moveDown: Boolean = false) {
         if (editing.isBlank()) cells.remove(selected) else cells[selected] = editing.trim()
+        if (moveDown) {
+            val column = FormulaEngine.columnIndex(selected.takeWhile { it.isLetter() })
+            val currentRow = selected.dropWhile { it.isLetter() }.toIntOrNull() ?: return
+            if (currentRow < rows) {
+                // cellKey est indexé à partir de 0 : currentRow désigne donc la ligne suivante.
+                selected = FormulaEngine.cellKey(currentRow, column)
+            } else {
+                editing = ""
+            }
+        }
     }
 
     fun toCsv(): String = (0 until rows).joinToString("\n") { r ->
@@ -274,7 +289,11 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                         modifier = Modifier.weight(1f),
                         singleLine = true,
                         placeholder = { Text("Valeur ou =SOMME(A1:A10)") },
-                        textStyle = MaterialTheme.typography.bodyMedium
+                        textStyle = MaterialTheme.typography.bodyMedium,
+                        // Sans action explicite, Entrée ne validait rien : la valeur
+                        // n'arrivait dans la cellule qu'au clic sur une autre cellule.
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { commitEdit(moveDown = true) })
                     )
                     IconButton(onClick = { commitEdit() }) {
                         Icon(
@@ -295,6 +314,10 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                         .padding(horizontal = 4.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    ToolToggle(Icons.Filled.Calculate, "Calculatrice") {
+                        commitEdit()
+                        showCalculator = true
+                    }
                     ToolToggle(Icons.Filled.Functions, "Insérer une fonction") { showFunctions = true }
                     ToolToggle(Icons.Filled.PieChart, "Créer un graphique") {
                         commitEdit()
@@ -361,6 +384,19 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                 }
             }
         }
+    }
+
+    if (showCalculator) {
+        CalculatorDialog(
+            cells = cells,
+            selectedCell = selected,
+            onInsert = { value ->
+                editing = value
+                cells[selected] = value
+                showCalculator = false
+            },
+            onDismiss = { showCalculator = false }
+        )
     }
 
     if (showChart) {

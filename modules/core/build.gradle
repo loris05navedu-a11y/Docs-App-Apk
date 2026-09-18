@@ -27,6 +27,12 @@ android {
     composeOptions {
         kotlinCompilerExtensionVersion = '1.5.0'
     }
+
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -36,4 +42,7 @@ dependencies {
     api 'androidx.compose.material3:material3:1.1.0'
     api 'androidx.compose.material:material-icons-extended:1.6.0'
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.11.1'
+    testImplementation 'androidx.compose.ui:ui-test-junit4:1.6.0'
+    debugImplementation 'androidx.compose.ui:ui-test-manifest:1.6.0'
 }
