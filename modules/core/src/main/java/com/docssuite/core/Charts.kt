@@ -195,7 +195,9 @@ fun ChartView(
     type: ChartType,
     title: String,
     entries: List<ChartEntry>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    canvasHeight: Dp? = null,
+    showDataPanel: Boolean = true
 ) {
     val palette = chartPalette()
     val surface = MaterialTheme.colorScheme.surface
@@ -244,7 +246,7 @@ fun ChartView(
             Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(if (isPie) 250.dp else 230.dp)
+                    .height(canvasHeight ?: if (isPie) 250.dp else 230.dp)
                     .padding(top = 12.dp)
             ) {
                 if (size.minDimension <= 0f) return@Canvas
@@ -259,7 +261,9 @@ fun ChartView(
                 }
             }
 
-            ChartDataPanel(type, data, boxes, palette, textPrimary, textSecondary)
+            if (showDataPanel) {
+                ChartDataPanel(type, data, boxes, palette, textPrimary, textSecondary)
+            }
         }
     }
 }

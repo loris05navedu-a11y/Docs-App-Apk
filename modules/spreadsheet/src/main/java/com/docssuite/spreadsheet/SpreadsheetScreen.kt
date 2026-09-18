@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -50,14 +51,17 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -66,6 +70,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.docssuite.core.ColorPickerDialog
+import com.docssuite.core.buildChartEntries
 import com.docssuite.core.ConfirmDialog
 import com.docssuite.core.DocType
 import com.docssuite.core.DocumentStorage
@@ -117,6 +122,18 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
     var showClearAll by remember { mutableStateOf(false) }
     var showChart by remember { mutableStateOf(false) }
     var showCalculator by remember { mutableStateOf(false) }
+
+    val charts = remember { mutableStateListOf<EmbeddedChart>() }
+    var selectedChartId by remember { mutableStateOf<String?>(null) }
+    var editingChart by remember { mutableStateOf<EmbeddedChart?>(null) }
+    val gridState = rememberLazyListState()
+    val density = LocalDensity.current
+    val cellHeightPx = with(density) { CELL_HEIGHT.toPx() }
+
+    fun updateChart(id: String, transform: (EmbeddedChart) -> EmbeddedChart) {
+        val index = charts.indexOfFirst { it.id == id }
+        if (index >= 0) charts[index] = transform(charts[index])
+    }
     var savedMessage by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(selected) { editing = cells[selected] ?: "" }
@@ -153,6 +170,8 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
         val decoded = decodeSheet(payload)
         cells.clear(); cells.putAll(decoded.cells)
         formats.clear(); formats.putAll(decoded.formats)
+        charts.clear(); charts.addAll(decoded.charts)
+        selectedChartId = null
         columns = decoded.columns
         rows = decoded.rows
         docId = id
@@ -188,7 +207,12 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                 actions = {
                     IconButton(onClick = {
                         commitEdit()
-                        storage.save(docId, docName, DocType.SHEET, encodeSheet(cells, formats, columns, rows))
+                        storage.save(
+                            docId,
+                            docName,
+                            DocType.SHEET,
+                            encodeSheet(cells, formats, columns, rows, charts)
+                        )
                         savedMessage = "Classeur enregistré"
                     }) {
                         Icon(Icons.Filled.Save, contentDescription = "Enregistrer")
@@ -202,7 +226,8 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                                 text = { Text("Nouveau classeur") },
                                 onClick = {
                                     showMenu = false
-                                    cells.clear(); formats.clear()
+                                    cells.clear(); formats.clear(); charts.clear()
+                                    selectedChartId = null
                                     columns = DEFAULT_COLUMNS; rows = DEFAULT_ROWS
                                     docId = storage.newId(); docName = "Classeur sans titre"
                                     selected = "A1"
@@ -360,27 +385,66 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                 }
             }
 
-            // --- Grille ---
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(rows) { r ->
-                    Row(modifier = Modifier.fillMaxWidth()) {
-                        val rowActive = selected.dropWhile { it.isLetter() }.toIntOrNull() == r + 1
-                        HeaderCell("${r + 1}", HEADER_WIDTH, rowActive)
-                        Row(modifier = Modifier.horizontalScroll(hScroll)) {
-                            for (c in 0 until columns) {
-                                val key = FormulaEngine.cellKey(r, c)
-                                GridCell(
-                                    value = FormulaEngine.displayValue(key, cells),
-                                    format = formats[key] ?: CellFormat(),
-                                    isSelected = key == selected,
-                                    onClick = {
-                                        commitEdit()
-                                        selected = key
-                                    }
-                                )
+            // --- Grille, avec les graphiques posés par-dessus ---
+            Box(modifier = Modifier.fillMaxSize().clipToBounds()) {
+                LazyColumn(state = gridState, modifier = Modifier.fillMaxSize()) {
+                    items(rows) { r ->
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            val rowActive = selected.dropWhile { it.isLetter() }.toIntOrNull() == r + 1
+                            HeaderCell("${r + 1}", HEADER_WIDTH, rowActive)
+                            Row(modifier = Modifier.horizontalScroll(hScroll)) {
+                                for (c in 0 until columns) {
+                                    val key = FormulaEngine.cellKey(r, c)
+                                    GridCell(
+                                        value = FormulaEngine.displayValue(key, cells),
+                                        format = formats[key] ?: CellFormat(),
+                                        isSelected = key == selected,
+                                        onClick = {
+                                            commitEdit()
+                                            selected = key
+                                            selectedChartId = null
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
+                }
+
+                // Les graphiques suivent le défilement : leur position est ancrée
+                // à la feuille, pas à l'écran.
+                val scrollY = gridState.firstVisibleItemIndex * cellHeightPx +
+                    gridState.firstVisibleItemScrollOffset
+                charts.forEach { chart ->
+                    FloatingChart(
+                        chart = chart,
+                        entries = buildChartEntries(chart.labelsRange, chart.valuesRange, cells),
+                        selected = chart.id == selectedChartId,
+                        screenX = with(density) { chart.x.dp.toPx() } - hScroll.value,
+                        screenY = with(density) { chart.y.dp.toPx() } - scrollY,
+                        onSelect = { selectedChartId = chart.id },
+                        onMove = { dx, dy ->
+                            updateChart(chart.id) {
+                                it.copy(
+                                    x = (it.x + dx).coerceAtLeast(0f),
+                                    y = (it.y + dy).coerceAtLeast(0f)
+                                )
+                            }
+                        },
+                        onResize = { dw, dh ->
+                            updateChart(chart.id) {
+                                it.copy(
+                                    width = (it.width + dw).coerceAtLeast(MIN_CHART_WIDTH),
+                                    height = (it.height + dh).coerceAtLeast(MIN_CHART_HEIGHT)
+                                )
+                            }
+                        },
+                        onEdit = { editingChart = chart; showChart = true },
+                        onDelete = {
+                            charts.removeAll { it.id == chart.id }
+                            selectedChartId = null
+                        }
+                    )
                 }
             }
         }
@@ -405,9 +469,38 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
         } ?: 5
         ChartDialog(
             cells = cells,
-            initialLabelsRange = "A1:A${lastUsedRow + 1}",
-            initialValuesRange = "B1:B${lastUsedRow + 1}",
-            onDismiss = { showChart = false }
+            initial = editingChart,
+            defaultLabelsRange = "A1:A${lastUsedRow + 1}",
+            defaultValuesRange = "B1:B${lastUsedRow + 1}",
+            onConfirm = { type, title, labelsRange, valuesRange ->
+                val existing = editingChart
+                if (existing == null) {
+                    val chart = EmbeddedChart(
+                        id = storage.newId(),
+                        type = type,
+                        title = title,
+                        labelsRange = labelsRange,
+                        valuesRange = valuesRange,
+                        // Décalé à chaque insertion pour ne pas empiler les graphiques.
+                        x = 24f + charts.size * 16f,
+                        y = 24f + charts.size * 16f
+                    )
+                    charts.add(chart)
+                    selectedChartId = chart.id
+                } else {
+                    updateChart(existing.id) {
+                        it.copy(
+                            type = type,
+                            title = title,
+                            labelsRange = labelsRange,
+                            valuesRange = valuesRange
+                        )
+                    }
+                }
+                editingChart = null
+                showChart = false
+            },
+            onDismiss = { editingChart = null; showChart = false }
         )
     }
 
@@ -568,14 +661,16 @@ private class DecodedSheet(
     val cells: Map<String, String>,
     val formats: Map<String, CellFormat>,
     val columns: Int,
-    val rows: Int
+    val rows: Int,
+    val charts: List<EmbeddedChart>
 )
 
 private fun encodeSheet(
     cells: Map<String, String>,
     formats: Map<String, CellFormat>,
     columns: Int,
-    rows: Int
+    rows: Int,
+    charts: List<EmbeddedChart>
 ): String {
     val cellsJson = JSONObject()
     cells.forEach { (key, value) -> cellsJson.put(key, value) }
@@ -591,6 +686,7 @@ private fun encodeSheet(
         put("rows", rows)
         put("cells", cellsJson)
         put("formats", formatsJson)
+        put("charts", chartsToJson(charts))
     }.toString()
 }
 
@@ -616,7 +712,8 @@ private fun decodeSheet(payload: String): DecodedSheet {
         cells = cells,
         formats = formats,
         columns = root.optInt("columns", DEFAULT_COLUMNS),
-        rows = root.optInt("rows", DEFAULT_ROWS)
+        rows = root.optInt("rows", DEFAULT_ROWS),
+        charts = chartsFromJson(root.optJSONArray("charts"))
     )
 }
 

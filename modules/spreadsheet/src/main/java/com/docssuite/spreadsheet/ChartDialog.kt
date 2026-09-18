@@ -12,9 +12,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -39,14 +41,16 @@ import com.docssuite.core.buildChartEntries
 @Composable
 fun ChartDialog(
     cells: Map<String, String>,
-    initialLabelsRange: String,
-    initialValuesRange: String,
+    initial: EmbeddedChart?,
+    defaultLabelsRange: String,
+    defaultValuesRange: String,
+    onConfirm: (ChartType, String, String, String) -> Unit,
     onDismiss: () -> Unit
 ) {
-    var type by remember { mutableStateOf(ChartType.COLUMN) }
-    var labelsRange by remember { mutableStateOf(initialLabelsRange) }
-    var valuesRange by remember { mutableStateOf(initialValuesRange) }
-    var title by remember { mutableStateOf("Mon graphique") }
+    var type by remember { mutableStateOf(initial?.type ?: ChartType.COLUMN) }
+    var labelsRange by remember { mutableStateOf(initial?.labelsRange ?: defaultLabelsRange) }
+    var valuesRange by remember { mutableStateOf(initial?.valuesRange ?: defaultValuesRange) }
+    var title by remember { mutableStateOf(initial?.title ?: "Mon graphique") }
 
     val entries = remember(labelsRange, valuesRange, cells.toMap()) {
         buildChartEntries(labelsRange, valuesRange, cells)
@@ -154,6 +158,22 @@ fun ChartDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 4.dp)
                     )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) {
+                        Text("Annuler")
+                    }
+                    Button(
+                        onClick = { onConfirm(type, title, labelsRange, valuesRange) },
+                        modifier = Modifier.weight(1f),
+                        enabled = entries.isNotEmpty()
+                    ) {
+                        Text(if (initial == null) "Insérer dans la feuille" else "Mettre à jour")
+                    }
                 }
             }
         }
