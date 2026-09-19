@@ -1,0 +1,33 @@
+plugins {
+    id 'com.android.library'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace "com.docssuite.fileformats"
+    compileSdk 35
+
+    defaultConfig {
+        minSdk 24
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    kotlinOptions {
+        jvmTarget = "11"
+    }
+
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+        }
+    }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.11.1'
+}
