@@ -100,6 +100,19 @@ class SheetBridgeTest {
     }
 
     @Test
+    fun `l export se limite a la zone remplie`() {
+        // La grille affichée est bien plus grande que les données : sans cette
+        // coupe, un PDF issu d'un classeur importé ferait des milliers de pages.
+        val sheet = buildWorkbook("Budget", cells, formats, 700, 5000).sheets.first()
+        assertEquals(2, sheet.columns)
+        assertEquals(4, sheet.rows)
+
+        val lines = Csv.write(sheet) { sheetDisplayValue(sheet, it) }.split("\r\n")
+        assertEquals(4, lines.size)
+        assertEquals("Poste;Montant", lines[0])
+    }
+
+    @Test
     fun `un classeur vide reste utilisable`() {
         val restored = decodeWorkbook(Workbook("Vide", emptyList()), "Vide")
         assertTrue(restored.cells.isEmpty())

@@ -73,7 +73,7 @@ fun rememberFileOpener(
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
-            val result = withContext(Dispatchers.IO) { runCatching { readUri(context, uri) } }
+            val result = withContext(Dispatchers.IO) { runCatching { readFile(context, uri) } }
             result
                 .onSuccess(onPicked)
                 .onFailure { onError(it.message ?: "Lecture du fichier impossible") }
@@ -100,7 +100,7 @@ fun rememberFileSaver(
 ): FileSaver {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var pendingName = remember { arrayOf("document") }
+    val pendingName = remember { arrayOf("document") }
     val launcher = rememberLauncherForActivityResult(CreateNamedDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
@@ -125,7 +125,8 @@ fun rememberFileSaver(
     }
 }
 
-private fun readUri(context: Context, uri: Uri): PickedFile {
+/** Charge le contenu d'une `content://` en mémoire, avec les mêmes garde-fous. */
+fun readFile(context: Context, uri: Uri): PickedFile {
     val resolver = context.contentResolver
     val name = displayName(context, uri) ?: "fichier"
     val size = resolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->

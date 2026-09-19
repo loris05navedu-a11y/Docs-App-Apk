@@ -16,26 +16,39 @@ internal fun buildWorkbook(
     formats: Map<String, CellFormat>,
     columns: Int,
     rows: Int
-): Workbook = Workbook(
-    title = name,
-    sheets = listOf(
-        Sheet(
-            name = name.take(31).ifBlank { "Feuille1" },
-            cells = cells.toMap(),
-            styles = formats.mapValues { (_, format) ->
-                CellStyle(
-                    bold = format.bold,
-                    italic = format.italic,
-                    color = format.color,
-                    background = format.background,
-                    align = format.align
-                )
-            },
-            columns = columns,
-            rows = rows
+): Workbook {
+    // La grille affichée est toujours plus grande que les données : on
+    // n'exporte que la zone utilisée. Sans cela, un CSV ou un PDF issu d'un
+    // classeur importé de 5000 lignes vides ferait des milliers de pages.
+    var usedColumns = 0
+    var usedRows = 0
+    (cells.keys + formats.keys).forEach { ref ->
+        val position = CellRef.parse(ref) ?: return@forEach
+        usedRows = maxOf(usedRows, position.first + 1)
+        usedColumns = maxOf(usedColumns, position.second + 1)
+    }
+
+    return Workbook(
+        title = name,
+        sheets = listOf(
+            Sheet(
+                name = name.take(31).ifBlank { "Feuille1" },
+                cells = cells.toMap(),
+                styles = formats.mapValues { (_, format) ->
+                    CellStyle(
+                        bold = format.bold,
+                        italic = format.italic,
+                        color = format.color,
+                        background = format.background,
+                        align = format.align
+                    )
+                },
+                columns = usedColumns.coerceIn(1, columns),
+                rows = usedRows.coerceIn(1, rows)
+            )
         )
     )
-)
+}
 
 /**
  * Valeur calculée d'une cellule, telle qu'elle s'affiche dans l'app. Les

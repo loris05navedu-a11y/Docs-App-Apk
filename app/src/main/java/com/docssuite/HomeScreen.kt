@@ -1,5 +1,6 @@
 package com.docssuite
 
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -37,6 +38,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import com.docssuite.core.DocMeta
 import com.docssuite.core.DocType
 import com.docssuite.core.DocumentStorage
+import com.docssuite.core.readFile
 import com.docssuite.core.rememberFileOpener
 import com.docssuite.fileformats.FileFormats
 import com.docssuite.fileformats.Imported
@@ -73,7 +76,9 @@ fun HomeScreen(
     onOpenSpreadsheet: (String?) -> Unit,
     onOpenPresentation: (String?) -> Unit,
     onOpenPdf: (PdfPayload?) -> Unit,
-    onOpenMedia: () -> Unit
+    onOpenMedia: () -> Unit,
+    incomingFile: Uri? = null,
+    onIncomingHandled: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val storage = remember { DocumentStorage(context) }
@@ -88,37 +93,45 @@ fun HomeScreen(
 
     // Un fichier importé est d'abord converti et enregistré, puis l'éditeur
     // correspondant s'ouvre dessus — comme n'importe quel document récent.
+    fun route(imported: Imported, fileName: String) {
+        when (imported) {
+            is Imported.AsText -> onOpenTextEditor(
+                saveImportedTextDocument(storage, imported.document, imported.suggestedName)
+            )
+            is Imported.AsSheet -> onOpenSpreadsheet(
+                saveImportedWorkbook(storage, imported.workbook, imported.suggestedName)
+            )
+            is Imported.AsDeck -> onOpenPresentation(
+                saveImportedDeck(storage, imported.deck, imported.suggestedName)
+            )
+            is Imported.AsPdf -> onOpenPdf(PdfPayload(fileName, imported.bytes))
+        }
+    }
+
     val opener = rememberFileOpener(onError = ::report) { picked ->
         scope.launch {
-            val result = withContext(Dispatchers.IO) {
+            withContext(Dispatchers.IO) {
                 runCatching { FileFormats.import(picked.name, picked.bytes) }
             }
-            result
-                .onSuccess { imported ->
-                    when (imported) {
-                        is Imported.AsText -> onOpenTextEditor(
-                            saveImportedTextDocument(
-                                storage,
-                                imported.document,
-                                imported.suggestedName
-                            )
-                        )
-                        is Imported.AsSheet -> onOpenSpreadsheet(
-                            saveImportedWorkbook(
-                                storage,
-                                imported.workbook,
-                                imported.suggestedName
-                            )
-                        )
-                        is Imported.AsDeck -> onOpenPresentation(
-                            saveImportedDeck(storage, imported.deck, imported.suggestedName)
-                        )
-                        is Imported.AsPdf ->
-                            onOpenPdf(PdfPayload(picked.name, imported.bytes))
-                    }
-                }
+                .onSuccess { route(it, picked.name) }
                 .onFailure { report(it.message ?: "Ce fichier n'a pas pu être ouvert") }
         }
+    }
+
+    // Fichier ouvert ou partagé depuis une autre application. On ne signale
+    // qu'il est traité qu'à la toute fin : le faire plus tôt annulerait la
+    // lecture en cours, puisque c'est ce qui relance l'effet.
+    LaunchedEffect(incomingFile) {
+        val uri = incomingFile ?: return@LaunchedEffect
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val picked = readFile(context, uri)
+                FileFormats.import(picked.name, picked.bytes) to picked.name
+            }
+        }
+            .onSuccess { (imported, name) -> route(imported, name) }
+            .onFailure { report(it.message ?: "Ce fichier n'a pas pu être ouvert") }
+        onIncomingHandled()
     }
 
     Scaffold(

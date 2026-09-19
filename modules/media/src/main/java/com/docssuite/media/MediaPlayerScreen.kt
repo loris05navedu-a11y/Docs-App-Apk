@@ -56,6 +56,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -108,8 +109,10 @@ fun MediaPlayerScreen(onBack: () -> Unit) {
         controller.load(playlist[index].uri)
     }
 
-    controller.onCompleted = {
-        if (currentIndex + 1 in playlist.indices) playAt(currentIndex + 1) else Unit
+    SideEffect {
+        controller.onCompleted = {
+            if (currentIndex + 1 in playlist.indices) playAt(currentIndex + 1)
+        }
     }
 
     val picker = rememberLauncherForActivityResult(

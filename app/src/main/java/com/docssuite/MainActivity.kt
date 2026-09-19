@@ -6,7 +6,6 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -18,9 +17,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.docssuite.core.DocumentStorage
-import com.docssuite.core.displayName
-import com.docssuite.fileformats.FileFormats
-import com.docssuite.fileformats.Imported
 import com.docssuite.fileformats.TextDocument
 import com.docssuite.fileformats.TextParagraph
 import com.docssuite.fileformats.TextRun
@@ -28,14 +24,10 @@ import com.docssuite.media.MediaPlayerScreen
 import com.docssuite.pdf.PdfPayload
 import com.docssuite.pdf.PdfViewerScreen
 import com.docssuite.presentation.PresentationScreen
-import com.docssuite.presentation.saveImportedDeck
 import com.docssuite.spreadsheet.SpreadsheetScreen
-import com.docssuite.spreadsheet.saveImportedWorkbook
 import com.docssuite.texteditor.TextEditorScreen
 import com.docssuite.texteditor.saveImportedTextDocument
 import com.docssuite.ui.theme.DocsSuiteTheme
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -65,10 +57,10 @@ class MainActivity : ComponentActivity() {
         uriFrom(intent)?.let { incoming = it }
     }
 
+    @Suppress("DEPRECATION")
     private fun uriFrom(intent: Intent?): Uri? = when (intent?.action) {
         Intent.ACTION_VIEW -> intent.data
-        Intent.ACTION_SEND -> @Suppress("DEPRECATION")
-        intent.getParcelableExtra(Intent.EXTRA_STREAM)
+        Intent.ACTION_SEND -> intent.getParcelableExtra(Intent.EXTRA_STREAM)
         else -> null
     }
 }
@@ -111,39 +103,6 @@ fun DocsSuiteApp(
         navController.navigate(route("text_editor", id))
     }
 
-    LaunchedEffect(incomingFile) {
-        val uri = incomingFile ?: return@LaunchedEffect
-        onIncomingHandled()
-        val loaded = withContext(Dispatchers.IO) {
-            runCatching {
-                val name = displayName(context, uri) ?: "fichier"
-                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                    ?: throw IllegalStateException("Fichier illisible")
-                FileFormats.import(name, bytes) to name
-            }
-        }
-        loaded.onSuccess { (imported, name) ->
-            when (imported) {
-                is Imported.AsText -> navController.navigate(
-                    route(
-                        "text_editor",
-                        saveImportedTextDocument(storage, imported.document, imported.suggestedName)
-                    )
-                )
-                is Imported.AsSheet -> navController.navigate(
-                    route(
-                        "spreadsheet",
-                        saveImportedWorkbook(storage, imported.workbook, imported.suggestedName)
-                    )
-                )
-                is Imported.AsDeck -> navController.navigate(
-                    route("presentation", saveImportedDeck(storage, imported.deck, imported.suggestedName))
-                )
-                is Imported.AsPdf -> openPdf(PdfPayload(name, imported.bytes))
-            }
-        }
-    }
-
     NavHost(navController = navController, startDestination = "home") {
         composable("home") {
             HomeScreen(
@@ -151,7 +110,9 @@ fun DocsSuiteApp(
                 onOpenSpreadsheet = { navController.navigate(route("spreadsheet", it)) },
                 onOpenPresentation = { navController.navigate(route("presentation", it)) },
                 onOpenPdf = ::openPdf,
-                onOpenMedia = { navController.navigate("media") }
+                onOpenMedia = { navController.navigate("media") },
+                incomingFile = incomingFile,
+                onIncomingHandled = onIncomingHandled
             )
         }
         composable("text_editor?doc={doc}", arguments = docArgument()) { entry ->

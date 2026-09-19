@@ -9,6 +9,9 @@ import org.xmlpull.v1.XmlPullParser
  */
 object Odf {
 
+    /** Bride une plage répétée porteuse de contenu, cas rare mais possible. */
+    private const val MAX_REPEAT = 256
+
     private const val NS_OFFICE = "urn:oasis:names:tc:opendocument:xmlns:office:1.0"
     private const val NS_TEXT = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
     private const val NS_TABLE = "urn:oasis:names:tc:opendocument:xmlns:table:1.0"
@@ -318,6 +321,7 @@ object Odf {
         var row = -1
         var column = 0
         var maxColumn = 0
+        var lastRow = 0
         var repeatCell = 1
         var formula: String? = null
         val buffer = StringBuilder()
@@ -330,16 +334,14 @@ object Odf {
                     "table" -> {
                         cells = LinkedHashMap()
                         name = parser.attr("name").orEmpty()
-                        row = -1; maxColumn = 0
+                        row = -1; maxColumn = 0; lastRow = 0
                     }
                     "table-row" -> {
                         row++; column = 0
                     }
                     "table-cell", "covered-table-cell" -> {
-                        repeatCell = parser.attr("number-columns-repeated")?.toIntOrNull() ?: 1
-                        // Une feuille ODF se termine souvent par des milliers de
-                        // cellules vides répétées : inutile de les matérialiser.
-                        if (repeatCell > 1024) repeatCell = 1
+                        repeatCell = (parser.attr("number-columns-repeated")?.toIntOrNull() ?: 1)
+                            .coerceAtLeast(1)
                         formula = parser.attr("formula")
                         buffer.setLength(0)
                     }
@@ -353,13 +355,19 @@ object Odf {
                     "table-cell", "covered-table-cell" -> {
                         val text = formula?.let { "=" + formulaToFrench(fromOdfFormula(it)) }
                             ?: buffer.toString()
-                        repeat(repeatCell) {
-                            if (text.isNotEmpty() && row >= 0) {
+                        if (text.isEmpty() || row < 0) {
+                            // Une feuille ODF se termine par des milliers de
+                            // cellules vides répétées : on saute la plage sans
+                            // la matérialiser ni élargir la feuille.
+                            column += repeatCell
+                        } else {
+                            repeat(repeatCell.coerceAtMost(MAX_REPEAT)) {
                                 cells[CellRef.key(row, column)] = text
+                                column++
                             }
-                            column++
+                            maxColumn = maxOf(maxColumn, column)
+                            lastRow = row + 1
                         }
-                        maxColumn = maxOf(maxColumn, column)
                         formula = null
                         buffer.setLength(0)
                     }
@@ -368,7 +376,7 @@ object Odf {
                             name = name.ifBlank { "Feuille${sheets.size + 1}" },
                             cells = cells,
                             columns = maxOf(maxColumn, 12),
-                            rows = maxOf(row + 1, 40)
+                            rows = maxOf(lastRow, 40)
                         )
                     )
                 }

@@ -225,6 +225,36 @@ class RoundTripTest {
         assertTrue(restored.slides[0].content.contains("Deuxième ligne"))
     }
 
+    @Test
+    fun `le remplissage vide d un ods ne gonfle pas la feuille`() {
+        // LibreOffice termine chaque ligne par une plage vide qui va jusqu'au
+        // bout de la feuille : elle ne doit créer ni cellule ni colonne.
+        val content = XML_DECL +
+            "<office:document-content" +
+            " xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\"" +
+            " xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\"" +
+            " xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\">" +
+            "<office:body><office:spreadsheet><table:table table:name=\"Feuille1\">" +
+            "<table:table-row>" +
+            "<table:table-cell office:value-type=\"string\"><text:p>Nom</text:p></table:table-cell>" +
+            "<table:table-cell table:number-columns-repeated=\"16383\"/>" +
+            "</table:table-row>" +
+            "<table:table-row table:number-rows-repeated=\"1048575\">" +
+            "<table:table-cell table:number-columns-repeated=\"16384\"/>" +
+            "</table:table-row>" +
+            "</table:table></office:spreadsheet></office:body></office:document-content>"
+        val archive = ZipBuilder()
+            .add("content.xml", content)
+            .addStoredFirst("mimetype", Odf.MIME_SHEET)
+            .build()
+
+        val sheet = Odf.readSheet(archive).sheets.single()
+        assertEquals(1, sheet.cells.size)
+        assertEquals("Nom", sheet.cells["A1"])
+        assertEquals(12, sheet.columns)
+        assertEquals(40, sheet.rows)
+    }
+
     // ------------------------------------------------------------ texte
 
     @Test
