@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Seul ce dossier est exposé : les fichiers que l'app vient d'exporter. -->
+    <cache-path name="partage" path="partage/" />
+</paths>

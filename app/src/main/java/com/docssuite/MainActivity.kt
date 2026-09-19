@@ -1,27 +1,75 @@
 package com.docssuite
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.docssuite.core.DocumentStorage
+import com.docssuite.core.displayName
+import com.docssuite.fileformats.FileFormats
+import com.docssuite.fileformats.Imported
+import com.docssuite.fileformats.TextDocument
+import com.docssuite.fileformats.TextParagraph
+import com.docssuite.fileformats.TextRun
+import com.docssuite.media.MediaPlayerScreen
+import com.docssuite.pdf.PdfPayload
+import com.docssuite.pdf.PdfViewerScreen
 import com.docssuite.presentation.PresentationScreen
+import com.docssuite.presentation.saveImportedDeck
 import com.docssuite.spreadsheet.SpreadsheetScreen
+import com.docssuite.spreadsheet.saveImportedWorkbook
 import com.docssuite.texteditor.TextEditorScreen
+import com.docssuite.texteditor.saveImportedTextDocument
 import com.docssuite.ui.theme.DocsSuiteTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
+
+    /**
+     * Fichier reçu d'une autre application (« Ouvrir avec »). C'est un état
+     * d'activité et non de composable : l'intent peut aussi arriver alors que
+     * l'app tourne déjà.
+     */
+    private var incoming by mutableStateOf<Uri?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        incoming = uriFrom(intent)
         setContent {
             DocsSuiteTheme {
-                DocsSuiteApp()
+                DocsSuiteApp(
+                    incomingFile = incoming,
+                    onIncomingHandled = { incoming = null }
+                )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        uriFrom(intent)?.let { incoming = it }
+    }
+
+    private fun uriFrom(intent: Intent?): Uri? = when (intent?.action) {
+        Intent.ACTION_VIEW -> intent.data
+        Intent.ACTION_SEND -> @Suppress("DEPRECATION")
+        intent.getParcelableExtra(Intent.EXTRA_STREAM)
+        else -> null
     }
 }
 
@@ -37,15 +85,73 @@ private fun docArgument() = listOf(
 )
 
 @Composable
-fun DocsSuiteApp() {
+fun DocsSuiteApp(
+    incomingFile: Uri? = null,
+    onIncomingHandled: () -> Unit = {}
+) {
     val navController = rememberNavController()
+    val context = LocalContext.current
+    val storage = remember { DocumentStorage(context) }
+
+    // Un PDF se transmet par ses octets, pas par un argument de navigation :
+    // une route ne peut pas porter un fichier.
+    var pdfPayload by remember { mutableStateOf<PdfPayload?>(null) }
+
+    fun openPdf(payload: PdfPayload?) {
+        pdfPayload = payload
+        navController.navigate("pdf")
+    }
+
+    fun openExtractedText(name: String, text: String) {
+        val document = TextDocument(
+            name,
+            text.split('\n').map { TextParagraph(listOf(TextRun(it))) }
+        )
+        val id = saveImportedTextDocument(storage, document, name)
+        navController.navigate(route("text_editor", id))
+    }
+
+    LaunchedEffect(incomingFile) {
+        val uri = incomingFile ?: return@LaunchedEffect
+        onIncomingHandled()
+        val loaded = withContext(Dispatchers.IO) {
+            runCatching {
+                val name = displayName(context, uri) ?: "fichier"
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: throw IllegalStateException("Fichier illisible")
+                FileFormats.import(name, bytes) to name
+            }
+        }
+        loaded.onSuccess { (imported, name) ->
+            when (imported) {
+                is Imported.AsText -> navController.navigate(
+                    route(
+                        "text_editor",
+                        saveImportedTextDocument(storage, imported.document, imported.suggestedName)
+                    )
+                )
+                is Imported.AsSheet -> navController.navigate(
+                    route(
+                        "spreadsheet",
+                        saveImportedWorkbook(storage, imported.workbook, imported.suggestedName)
+                    )
+                )
+                is Imported.AsDeck -> navController.navigate(
+                    route("presentation", saveImportedDeck(storage, imported.deck, imported.suggestedName))
+                )
+                is Imported.AsPdf -> openPdf(PdfPayload(name, imported.bytes))
+            }
+        }
+    }
 
     NavHost(navController = navController, startDestination = "home") {
         composable("home") {
             HomeScreen(
                 onOpenTextEditor = { navController.navigate(route("text_editor", it)) },
                 onOpenSpreadsheet = { navController.navigate(route("spreadsheet", it)) },
-                onOpenPresentation = { navController.navigate(route("presentation", it)) }
+                onOpenPresentation = { navController.navigate(route("presentation", it)) },
+                onOpenPdf = ::openPdf,
+                onOpenMedia = { navController.navigate("media") }
             )
         }
         composable("text_editor?doc={doc}", arguments = docArgument()) { entry ->
@@ -65,6 +171,16 @@ fun DocsSuiteApp() {
                 onBack = { navController.popBackStack() },
                 initialDocId = entry.arguments?.getString("doc")
             )
+        }
+        composable("pdf") {
+            PdfViewerScreen(
+                onBack = { navController.popBackStack() },
+                initialFile = pdfPayload,
+                onOpenAsDocument = ::openExtractedText
+            )
+        }
+        composable("media") {
+            MediaPlayerScreen(onBack = { navController.popBackStack() })
         }
     }
 }

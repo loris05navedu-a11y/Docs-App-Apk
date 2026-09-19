@@ -53,6 +53,8 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Divider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -68,6 +70,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -93,11 +96,25 @@ import com.docssuite.core.FontSizes
 import com.docssuite.core.ListPickerDialog
 import com.docssuite.core.TextInputDialog
 import com.docssuite.core.fontFamilyAt
+import com.docssuite.core.ExportAction
+import com.docssuite.core.ExportFormatDialog
+import com.docssuite.core.importMimeTypes
+import com.docssuite.core.rememberFileOpener
+import com.docssuite.core.rememberFileSaver
+import com.docssuite.core.safeFileName
+import com.docssuite.core.shareBytes
 import com.docssuite.core.shareText
+import com.docssuite.fileformats.DocKind
+import com.docssuite.fileformats.FileFormat
+import com.docssuite.fileformats.FileFormats
+import com.docssuite.fileformats.Imported
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-private data class Slide(
+internal data class Slide(
     val title: String = "",
     val content: String = "",
     val background: Long = 0xFF1E293BL,
@@ -154,7 +171,12 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
     var showRename by remember { mutableStateOf(false) }
     var showOpen by remember { mutableStateOf(false) }
     var showThemes by remember { mutableStateOf(false) }
-    var savedMessage by remember { mutableStateOf<String?>(null) }
+    var showExport by remember { mutableStateOf(false) }
+    var notice by remember { mutableStateOf<Pair<String, String>?>(null) }
+    val scope = rememberCoroutineScope()
+
+    // Format retenu le temps que l'utilisateur choisisse où ranger le fichier.
+    var pendingFormat by remember { mutableStateOf(FileFormat.PPTX) }
     var colorTargetIndex by remember { mutableStateOf(-1) }
     var colorTargetIsBackground by remember { mutableStateOf(true) }
     var fontTargetIndex by remember { mutableStateOf(-1) }
@@ -179,6 +201,70 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
         if (initialDocId != null) {
             storage.list(DocType.DECK).firstOrNull { it.id == initialDocId }
                 ?.let { openDocument(it.id, it.name) }
+        }
+    }
+
+    fun currentDeck() = buildDeck(docName, slides.toList())
+
+    val fileSaver = rememberFileSaver(
+        onError = { notice = "Enregistrement impossible" to it },
+        onSaved = { notice = "Fichier enregistré" to "« $it » est disponible à l'emplacement choisi." },
+        content = { FileFormats.exportDeck(pendingFormat, currentDeck()) }
+    )
+
+    val fileOpener = rememberFileOpener(
+        onError = { notice = "Import impossible" to it }
+    ) { picked ->
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { FileFormats.import(picked.name, picked.bytes) }
+            }
+            result
+                .onSuccess { imported ->
+                    if (imported is Imported.AsDeck) {
+                        val decoded = decodeDeckModel(imported.deck)
+                        if (decoded.isEmpty()) {
+                            notice = "Présentation vide" to
+                                "« ${picked.name} » ne contient aucune diapositive lisible."
+                        } else {
+                            slides.clear()
+                            slides.addAll(decoded)
+                            // Un import devient une nouvelle présentation : on ne
+                            // veut pas écraser celle qui était ouverte.
+                            docId = storage.newId()
+                            docName = imported.suggestedName
+                        }
+                    } else {
+                        notice = "Ce n'est pas une présentation" to
+                            "« ${picked.name} » est un document, un tableur ou un PDF. " +
+                            "Ouvrez-le depuis l'accueil."
+                    }
+                }
+                .onFailure { notice = "Import impossible" to (it.message ?: "Fichier illisible") }
+        }
+    }
+
+    fun export(format: FileFormat, action: ExportAction) {
+        showExport = false
+        pendingFormat = format
+        val fileName = safeFileName(docName, format)
+        when (action) {
+            ExportAction.SAVE -> fileSaver.save(fileName, format.mime)
+            ExportAction.SHARE -> scope.launch {
+                val deck = currentDeck()
+                val produced = withContext(Dispatchers.IO) {
+                    runCatching { FileFormats.exportDeck(format, deck) }
+                }
+                produced
+                    .onSuccess {
+                        shareBytes(context, fileName, format.mime, it) { message ->
+                            notice = "Partage impossible" to message
+                        }
+                    }
+                    .onFailure {
+                        notice = "Export impossible" to (it.message ?: "Conversion échouée")
+                    }
+            }
         }
     }
 
@@ -210,7 +296,8 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
                     }
                     IconButton(onClick = {
                         storage.save(docId, docName, DocType.DECK, encodeDeck(slides))
-                        savedMessage = "Présentation enregistrée"
+                        notice = "Présentation enregistrée" to
+                            "« $docName » a bien été enregistrée dans l'application."
                     }) {
                         Icon(Icons.Filled.Save, contentDescription = "Enregistrer")
                     }
@@ -246,6 +333,23 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
                                 onClick = { showMenu = false; showAllTransitions = true }
                             )
                             Divider()
+                            DropdownMenuItem(
+                                text = { Text("Importer un fichier…") },
+                                leadingIcon = {
+                                    Icon(Icons.Filled.FileOpen, contentDescription = null)
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    fileOpener.open(importMimeTypes(DocKind.DECK))
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Exporter (PowerPoint, PDF…)") },
+                                leadingIcon = {
+                                    Icon(Icons.Filled.FileDownload, contentDescription = null)
+                                },
+                                onClick = { showMenu = false; showExport = true }
+                            )
                             DropdownMenuItem(
                                 text = { Text("Partager le texte") },
                                 onClick = { showMenu = false; shareText(context, docName, deckAsText()) }
@@ -457,13 +561,21 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
         )
     }
 
-    savedMessage?.let { message ->
+    if (showExport) {
+        ExportFormatDialog(
+            kind = DocKind.DECK,
+            onPick = ::export,
+            onDismiss = { showExport = false }
+        )
+    }
+
+    notice?.let { (title, body) ->
         ConfirmDialog(
-            title = message,
-            message = "« $docName » a bien été enregistrée sur l'appareil.",
+            title = title,
+            message = body,
             confirmLabel = "OK",
-            onConfirm = { savedMessage = null },
-            onDismiss = { savedMessage = null }
+            onConfirm = { notice = null },
+            onDismiss = { notice = null }
         )
     }
 }
@@ -745,7 +857,7 @@ private fun textAlignFor(align: Int): TextAlign = when (align) {
     else -> TextAlign.Center
 }
 
-private fun encodeDeck(slides: List<Slide>): String {
+internal fun encodeDeck(slides: List<Slide>): String {
     val array = JSONArray()
     slides.forEach { slide ->
         array.put(JSONObject().apply {
@@ -763,7 +875,7 @@ private fun encodeDeck(slides: List<Slide>): String {
     return JSONObject().apply { put("slides", array) }.toString()
 }
 
-private fun decodeDeck(payload: String): List<Slide> {
+internal fun decodeDeck(payload: String): List<Slide> {
     val array = JSONObject(payload).optJSONArray("slides") ?: return emptyList()
     val out = ArrayList<Slide>()
     for (i in 0 until array.length()) {

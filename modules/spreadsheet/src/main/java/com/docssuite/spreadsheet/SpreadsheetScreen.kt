@@ -39,6 +39,8 @@ import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Divider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -55,6 +57,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,7 +83,21 @@ import com.docssuite.core.HighlightColors
 import com.docssuite.core.ListPickerDialog
 import com.docssuite.core.TextInputDialog
 import com.docssuite.core.ToolToggle
+import com.docssuite.core.ExportAction
+import com.docssuite.core.ExportFormatDialog
+import com.docssuite.core.importMimeTypes
+import com.docssuite.core.rememberFileOpener
+import com.docssuite.core.rememberFileSaver
+import com.docssuite.core.safeFileName
+import com.docssuite.core.shareBytes
 import com.docssuite.core.shareText
+import com.docssuite.fileformats.DocKind
+import com.docssuite.fileformats.FileFormat
+import com.docssuite.fileformats.FileFormats
+import com.docssuite.fileformats.Imported
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 private const val DEFAULT_COLUMNS = 12
@@ -89,7 +106,7 @@ private val CELL_WIDTH = 96.dp
 private val CELL_HEIGHT = 44.dp
 private val HEADER_WIDTH = 48.dp
 
-private data class CellFormat(
+internal data class CellFormat(
     val bold: Boolean = false,
     val italic: Boolean = false,
     val color: Long = 0xFF1A1A1AL,
@@ -122,6 +139,10 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
     var showClearAll by remember { mutableStateOf(false) }
     var showChart by remember { mutableStateOf(false) }
     var showCalculator by remember { mutableStateOf(false) }
+    var showExport by remember { mutableStateOf(false) }
+
+    // Format retenu le temps que l'utilisateur choisisse où ranger le fichier.
+    var pendingFormat by remember { mutableStateOf(FileFormat.XLSX) }
 
     val charts = remember { mutableStateListOf<EmbeddedChart>() }
     var selectedChartId by remember { mutableStateOf<String?>(null) }
@@ -134,7 +155,8 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
         val index = charts.indexOfFirst { it.id == id }
         if (index >= 0) charts[index] = transform(charts[index])
     }
-    var savedMessage by remember { mutableStateOf<String?>(null) }
+    var notice by remember { mutableStateOf<Pair<String, String>?>(null) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(selected) { editing = cells[selected] ?: "" }
 
@@ -186,6 +208,72 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
         }
     }
 
+    fun currentWorkbook() = buildWorkbook(docName, cells, formats, columns, rows)
+
+    val fileSaver = rememberFileSaver(
+        onError = { notice = "Enregistrement impossible" to it },
+        onSaved = { notice = "Fichier enregistré" to "« $it » est disponible à l'emplacement choisi." },
+        content = {
+            FileFormats.exportSheet(pendingFormat, currentWorkbook(), ::sheetDisplayValue)
+        }
+    )
+
+    val fileOpener = rememberFileOpener(
+        onError = { notice = "Import impossible" to it }
+    ) { picked ->
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { FileFormats.import(picked.name, picked.bytes) }
+            }
+            result
+                .onSuccess { imported ->
+                    if (imported is Imported.AsSheet) {
+                        val decoded = decodeWorkbook(imported.workbook, imported.suggestedName)
+                        cells.clear(); cells.putAll(decoded.cells)
+                        formats.clear(); formats.putAll(decoded.formats)
+                        charts.clear()
+                        selectedChartId = null
+                        columns = maxOf(decoded.columns, DEFAULT_COLUMNS)
+                        rows = maxOf(decoded.rows, DEFAULT_ROWS)
+                        // Un import devient un nouveau classeur : on ne veut pas
+                        // écraser celui qui était ouvert.
+                        docId = storage.newId()
+                        docName = imported.suggestedName
+                        selected = "A1"
+                    } else {
+                        notice = "Ce n'est pas un classeur" to
+                            "« ${picked.name} » est un document, une présentation ou un PDF. " +
+                            "Ouvrez-le depuis l'accueil."
+                    }
+                }
+                .onFailure { notice = "Import impossible" to (it.message ?: "Fichier illisible") }
+        }
+    }
+
+    fun export(format: FileFormat, action: ExportAction) {
+        showExport = false
+        pendingFormat = format
+        val fileName = safeFileName(docName, format)
+        when (action) {
+            ExportAction.SAVE -> fileSaver.save(fileName, format.mime)
+            ExportAction.SHARE -> scope.launch {
+                val workbook = currentWorkbook()
+                val produced = withContext(Dispatchers.IO) {
+                    runCatching { FileFormats.exportSheet(format, workbook, ::sheetDisplayValue) }
+                }
+                produced
+                    .onSuccess {
+                        shareBytes(context, fileName, format.mime, it) { message ->
+                            notice = "Partage impossible" to message
+                        }
+                    }
+                    .onFailure {
+                        notice = "Export impossible" to (it.message ?: "Conversion échouée")
+                    }
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -213,7 +301,8 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                             DocType.SHEET,
                             encodeSheet(cells, formats, columns, rows, charts)
                         )
-                        savedMessage = "Classeur enregistré"
+                        notice = "Classeur enregistré" to
+                            "« $docName » a bien été enregistré dans l'application."
                     }) {
                         Icon(Icons.Filled.Save, contentDescription = "Enregistrer")
                     }
@@ -242,7 +331,24 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                                 onClick = { showMenu = false; showRename = true }
                             )
                             DropdownMenuItem(
-                                text = { Text("Exporter en CSV") },
+                                text = { Text("Importer un fichier…") },
+                                leadingIcon = {
+                                    Icon(Icons.Filled.FileOpen, contentDescription = null)
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    fileOpener.open(importMimeTypes(DocKind.SHEET))
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Exporter (Excel, PDF…)") },
+                                leadingIcon = {
+                                    Icon(Icons.Filled.FileDownload, contentDescription = null)
+                                },
+                                onClick = { showMenu = false; showExport = true }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Partager en texte CSV") },
                                 onClick = { showMenu = false; shareText(context, "$docName.csv", toCsv()) }
                             )
                             Divider()
@@ -578,13 +684,21 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
         )
     }
 
-    savedMessage?.let { message ->
+    if (showExport) {
+        ExportFormatDialog(
+            kind = DocKind.SHEET,
+            onPick = ::export,
+            onDismiss = { showExport = false }
+        )
+    }
+
+    notice?.let { (title, body) ->
         ConfirmDialog(
-            title = message,
-            message = "« $docName » a bien été enregistré sur l'appareil.",
+            title = title,
+            message = body,
             confirmLabel = "OK",
-            onConfirm = { savedMessage = null },
-            onDismiss = { savedMessage = null }
+            onConfirm = { notice = null },
+            onDismiss = { notice = null }
         )
     }
 }
@@ -657,7 +771,7 @@ private fun GridCell(
     }
 }
 
-private class DecodedSheet(
+internal class DecodedSheet(
     val cells: Map<String, String>,
     val formats: Map<String, CellFormat>,
     val columns: Int,
@@ -665,7 +779,7 @@ private class DecodedSheet(
     val charts: List<EmbeddedChart>
 )
 
-private fun encodeSheet(
+internal fun encodeSheet(
     cells: Map<String, String>,
     formats: Map<String, CellFormat>,
     columns: Int,
@@ -690,7 +804,7 @@ private fun encodeSheet(
     }.toString()
 }
 
-private fun decodeSheet(payload: String): DecodedSheet {
+internal fun decodeSheet(payload: String): DecodedSheet {
     val root = JSONObject(payload)
     val cells = HashMap<String, String>()
     val cellsJson = root.optJSONObject("cells") ?: JSONObject()

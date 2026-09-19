@@ -27,6 +27,8 @@ import androidx.compose.material.icons.filled.FormatItalic
 import androidx.compose.material.icons.filled.FormatStrikethrough
 import androidx.compose.material.icons.filled.FormatUnderlined
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Redo
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Undo
@@ -47,6 +49,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,6 +66,8 @@ import com.docssuite.core.AppFont
 import com.docssuite.core.AppFonts
 import com.docssuite.core.ColorPickerDialog
 import com.docssuite.core.ConfirmDialog
+import com.docssuite.core.ExportAction
+import com.docssuite.core.ExportFormatDialog
 import com.docssuite.core.DocMeta
 import com.docssuite.core.DocType
 import com.docssuite.core.DocumentStorage
@@ -74,7 +79,19 @@ import com.docssuite.core.TextInputDialog
 import com.docssuite.core.ToolChip
 import com.docssuite.core.ToolToggle
 import com.docssuite.core.fontLabelAt
+import com.docssuite.core.importMimeTypes
+import com.docssuite.core.rememberFileOpener
+import com.docssuite.core.rememberFileSaver
+import com.docssuite.core.safeFileName
+import com.docssuite.core.shareBytes
 import com.docssuite.core.shareText
+import com.docssuite.fileformats.DocKind
+import com.docssuite.fileformats.FileFormat
+import com.docssuite.fileformats.FileFormats
+import com.docssuite.fileformats.Imported
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private data class Snapshot(
     val text: String,
@@ -87,6 +104,7 @@ private data class Snapshot(
 fun TextEditorScreen(onBack: () -> Unit, initialDocId: String? = null) {
     val context = LocalContext.current
     val storage = remember { DocumentStorage(context) }
+    val scope = rememberCoroutineScope()
 
     var value by remember { mutableStateOf(TextFieldValue("")) }
     var styles by remember { mutableStateOf<List<CharStyle>>(emptyList()) }
@@ -109,7 +127,11 @@ fun TextEditorScreen(onBack: () -> Unit, initialDocId: String? = null) {
     var showOpen by remember { mutableStateOf(false) }
     var showStats by remember { mutableStateOf(false) }
     var showClearConfirm by remember { mutableStateOf(false) }
-    var savedMessage by remember { mutableStateOf<String?>(null) }
+    var showExport by remember { mutableStateOf(false) }
+    var notice by remember { mutableStateOf<Pair<String, String>?>(null) }
+
+    // Format retenu le temps que l'utilisateur choisisse où ranger le fichier.
+    var pendingFormat by remember { mutableStateOf(FileFormat.DOCX) }
 
     val selection = value.selection
     val currentStyle = pending
@@ -151,6 +173,68 @@ fun TextEditorScreen(onBack: () -> Unit, initialDocId: String? = null) {
         }
     }
 
+    fun currentDocument() = buildTextDocument(docName, value.text, styles, align)
+
+    val fileSaver = rememberFileSaver(
+        onError = { notice = "Enregistrement impossible" to it },
+        onSaved = { notice = "Fichier enregistré" to "« $it » est disponible à l'emplacement choisi." },
+        content = { FileFormats.exportText(pendingFormat, currentDocument()) }
+    )
+
+    val fileOpener = rememberFileOpener(
+        onError = { notice = "Import impossible" to it }
+    ) { picked ->
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { FileFormats.import(picked.name, picked.bytes) }
+            }
+            result
+                .onSuccess { imported ->
+                    if (imported is Imported.AsText) {
+                        pushUndo()
+                        val decoded = decodeTextDocument(imported.document)
+                        value = TextFieldValue(decoded.text, TextRange(decoded.text.length))
+                        styles = decoded.styles
+                        align = decoded.align
+                        // Un import devient un nouveau document : on ne veut pas
+                        // écraser celui qui était ouvert.
+                        docId = storage.newId()
+                        docName = imported.suggestedName
+                        undoStack.clear(); redoStack.clear(); historyVersion++
+                    } else {
+                        notice = "Ce n'est pas un document" to
+                            "« ${picked.name} » est un tableur, une présentation ou un PDF. " +
+                            "Ouvrez-le depuis l'accueil."
+                    }
+                }
+                .onFailure { notice = "Import impossible" to (it.message ?: "Fichier illisible") }
+        }
+    }
+
+    fun export(format: FileFormat, action: ExportAction) {
+        showExport = false
+        pendingFormat = format
+        val fileName = safeFileName(docName, format)
+        when (action) {
+            ExportAction.SAVE -> fileSaver.save(fileName, format.mime)
+            ExportAction.SHARE -> scope.launch {
+                val document = currentDocument()
+                val produced = withContext(Dispatchers.IO) {
+                    runCatching { FileFormats.exportText(format, document) }
+                }
+                produced
+                    .onSuccess {
+                        shareBytes(context, fileName, format.mime, it) { message ->
+                            notice = "Partage impossible" to message
+                        }
+                    }
+                    .onFailure {
+                        notice = "Export impossible" to (it.message ?: "Conversion échouée")
+                    }
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -172,7 +256,8 @@ fun TextEditorScreen(onBack: () -> Unit, initialDocId: String? = null) {
                 actions = {
                     IconButton(onClick = {
                         storage.save(docId, docName, DocType.TEXT, stylesToJson(value.text, styles))
-                        savedMessage = "Enregistré"
+                        notice = "Enregistré" to
+                            "« $docName » a bien été enregistré dans l'application."
                     }) {
                         Icon(Icons.Filled.Save, contentDescription = "Enregistrer")
                     }
@@ -199,6 +284,23 @@ fun TextEditorScreen(onBack: () -> Unit, initialDocId: String? = null) {
                             DropdownMenuItem(
                                 text = { Text("Renommer") },
                                 onClick = { showMenu = false; showRename = true }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Importer un fichier…") },
+                                leadingIcon = {
+                                    Icon(Icons.Filled.FileOpen, contentDescription = null)
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    fileOpener.open(importMimeTypes(DocKind.TEXT))
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Exporter (Word, PDF…)") },
+                                leadingIcon = {
+                                    Icon(Icons.Filled.FileDownload, contentDescription = null)
+                                },
+                                onClick = { showMenu = false; showExport = true }
                             )
                             DropdownMenuItem(
                                 text = { Text("Partager le texte") },
@@ -494,13 +596,21 @@ fun TextEditorScreen(onBack: () -> Unit, initialDocId: String? = null) {
         )
     }
 
-    savedMessage?.let { message ->
+    if (showExport) {
+        ExportFormatDialog(
+            kind = DocKind.TEXT,
+            onPick = ::export,
+            onDismiss = { showExport = false }
+        )
+    }
+
+    notice?.let { (title, body) ->
         ConfirmDialog(
-            title = message,
-            message = "« $docName » a bien été enregistré sur l'appareil.",
+            title = title,
+            message = body,
             confirmLabel = "OK",
-            onConfirm = { savedMessage = null },
-            onDismiss = { savedMessage = null }
+            onConfirm = { notice = null },
+            onDismiss = { notice = null }
         )
     }
 }

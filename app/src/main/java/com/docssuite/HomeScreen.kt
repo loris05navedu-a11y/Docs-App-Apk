@@ -20,6 +20,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Slideshow
 import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material3.Card
@@ -29,12 +32,15 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,6 +52,16 @@ import androidx.compose.ui.unit.dp
 import com.docssuite.core.DocMeta
 import com.docssuite.core.DocType
 import com.docssuite.core.DocumentStorage
+import com.docssuite.core.rememberFileOpener
+import com.docssuite.fileformats.FileFormats
+import com.docssuite.fileformats.Imported
+import com.docssuite.pdf.PdfPayload
+import com.docssuite.presentation.saveImportedDeck
+import com.docssuite.spreadsheet.saveImportedWorkbook
+import com.docssuite.texteditor.saveImportedTextDocument
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -55,14 +71,58 @@ import java.util.Locale
 fun HomeScreen(
     onOpenTextEditor: (String?) -> Unit,
     onOpenSpreadsheet: (String?) -> Unit,
-    onOpenPresentation: (String?) -> Unit
+    onOpenPresentation: (String?) -> Unit,
+    onOpenPdf: (PdfPayload?) -> Unit,
+    onOpenMedia: () -> Unit
 ) {
     val context = LocalContext.current
     val storage = remember { DocumentStorage(context) }
+    val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
     var refreshKey by remember { mutableStateOf(0) }
     val documents = remember(refreshKey) { storage.list() }
 
+    fun report(message: String) {
+        scope.launch { snackbar.showSnackbar(message) }
+    }
+
+    // Un fichier importé est d'abord converti et enregistré, puis l'éditeur
+    // correspondant s'ouvre dessus — comme n'importe quel document récent.
+    val opener = rememberFileOpener(onError = ::report) { picked ->
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { FileFormats.import(picked.name, picked.bytes) }
+            }
+            result
+                .onSuccess { imported ->
+                    when (imported) {
+                        is Imported.AsText -> onOpenTextEditor(
+                            saveImportedTextDocument(
+                                storage,
+                                imported.document,
+                                imported.suggestedName
+                            )
+                        )
+                        is Imported.AsSheet -> onOpenSpreadsheet(
+                            saveImportedWorkbook(
+                                storage,
+                                imported.workbook,
+                                imported.suggestedName
+                            )
+                        )
+                        is Imported.AsDeck -> onOpenPresentation(
+                            saveImportedDeck(storage, imported.deck, imported.suggestedName)
+                        )
+                        is Imported.AsPdf ->
+                            onOpenPdf(PdfPayload(picked.name, imported.bytes))
+                    }
+                }
+                .onFailure { report(it.message ?: "Ce fichier n'a pas pu être ouvert") }
+        }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = {
@@ -113,6 +173,40 @@ fun HomeScreen(
                     Icons.Filled.Slideshow,
                     Color(0xFFEA580C)
                 ) { onOpenPresentation(null) }
+            }
+            item {
+                AppCard(
+                    "PDF",
+                    "Lire, zoomer et partager un PDF",
+                    Icons.Filled.PictureAsPdf,
+                    Color(0xFFDC2626)
+                ) { onOpenPdf(null) }
+            }
+            item {
+                AppCard(
+                    "Lecteur vidéo et audio",
+                    "MP4, MKV, WebM, MP3, FLAC…",
+                    Icons.Filled.PlayCircle,
+                    Color(0xFF7C3AED),
+                    onClick = onOpenMedia
+                )
+            }
+
+            item {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "Ouvrir",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            item {
+                AppCard(
+                    "Ouvrir un fichier",
+                    "Word, Excel, PowerPoint, OpenDocument, PDF, CSV, RTF…",
+                    Icons.Filled.FolderOpen,
+                    Color(0xFF0F766E)
+                ) { opener.open() }
             }
 
             if (documents.isNotEmpty()) {
