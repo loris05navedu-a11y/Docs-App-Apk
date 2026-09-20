@@ -101,7 +101,11 @@ fun ConfigureScreen(state: ConverterState, actions: ConverterActions) {
             }
 
             if (target != null) {
-                item { OptionsSection(state, target) }
+                // Un `item` qui n'émet rien laisserait un espacement orphelin :
+                // on ne l'ajoute que si la section a quelque chose à montrer.
+                if (target.optionGroup != OptionGroup.NONE || state.canMergeToPdf) {
+                    item { OptionsSection(state, target) }
+                }
                 item { ConversionSummary(state, target) }
             }
         }
@@ -240,7 +244,6 @@ private fun FormatCard(
 private fun OptionsSection(state: ConverterState, target: TargetFormat) {
     val sourceKind = state.selection.firstOrNull()?.kind ?: FileKind.OTHER
     val group = target.optionGroup
-    if (group == OptionGroup.NONE && !state.canMergeToPdf) return
 
     Column {
         SectionHeader("Options", subtitle = "Seuls les réglages utiles à ce format sont affichés")
@@ -414,11 +417,12 @@ private fun ConversionSummary(state: ConverterState, target: TargetFormat) {
             Divider(color = MaterialTheme.colorScheme.outlineVariant)
             SummaryRow("Format de sortie", target.label)
             Divider(color = MaterialTheme.colorScheme.outlineVariant)
+            val estimate = state.estimatedSize
             SummaryRow(
                 "Taille estimée",
                 when {
                     state.estimating -> "Calcul en cours…"
-                    state.estimatedSize != null -> "≈ ${formatSize(state.estimatedSize!!)}"
+                    estimate != null -> "≈ ${formatSize(estimate)}"
                     else -> "Connue après conversion"
                 }
             )

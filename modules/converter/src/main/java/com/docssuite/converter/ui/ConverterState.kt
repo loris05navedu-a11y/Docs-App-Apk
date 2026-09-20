@@ -80,8 +80,37 @@ class ConverterState(
     private var conversionJob: Job? = null
 
     init {
-        history.prune(settings.retention)
-        refreshHistory()
+        // Le nettoyage lit un fichier : il ne doit pas empêcher l'écran de
+        // s'ouvrir s'il est abîmé.
+        runCatching {
+            history.prune(settings.retention)
+            refreshHistory()
+        }
+    }
+
+    /**
+     * Lance un traitement sans jamais laisser une erreur remonter.
+     *
+     * Le scope vient de la composition : une exception qui s'en échappe
+     * n'affiche pas une erreur, elle emporte l'activité entière. Tout ce que
+     * cette classe démarre passe donc par ici, et le moindre incident devient
+     * un message affiché à l'utilisateur.
+     */
+    private fun launchGuarded(block: suspend () -> Unit): Job = scope.launch {
+        try {
+            block()
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            busyMessage = null
+            message = readableMessage(error)
+        }
+    }
+
+    private fun readableMessage(error: Throwable): String = when (error) {
+        is OutOfMemoryError -> "Ce fichier est trop volumineux pour cet appareil"
+        is SecurityException -> "L'accès à ce fichier a été refusé par le système"
+        else -> error.message?.takeIf { it.isNotBlank() } ?: "Ce fichier n'a pas pu être traité"
     }
 
     val singleSource: SourceFile? get() = selection.firstOrNull().takeIf { selection.size == 1 }
@@ -122,22 +151,27 @@ class ConverterState(
     /** Charge les fichiers choisis, puis établit ce qu'on peut réellement en faire. */
     fun select(uris: List<Uri>) {
         if (uris.isEmpty()) return
-        scope.launch {
+        launchGuarded {
             busyMessage = if (uris.size == 1) "Lecture du fichier…" else "Lecture des fichiers…"
+            // La raison du premier échec est conservée : dire « illisible »
+            // sans expliquer pourquoi n'aide personne.
+            var failure: String? = null
             val loaded = withContext(Dispatchers.IO) {
                 uris.mapNotNull { uri ->
                     runCatching {
                         val source = OutputStore.cacheSource(context, uri)
                         val probe = MediaProbe.inspect(source.cached, source.kind, source.extension)
                         source.copy(targets = probe.targets, detail = probe.detail) to probe.warning
-                    }.getOrNull()
+                    }
+                        .onFailure { error -> if (failure == null) failure = readableMessage(error) }
+                        .getOrNull()
                 }
             }
             busyMessage = null
 
             if (loaded.isEmpty()) {
-                message = "Ce fichier n'a pas pu être lu"
-                return@launch
+                message = failure ?: "Ce fichier n'a pas pu être lu"
+                return@launchGuarded
             }
             selection.clear()
             selection.addAll(loaded.map { it.first })
@@ -176,10 +210,13 @@ class ConverterState(
             estimatedSize = null
             return
         }
-        scope.launch {
+        launchGuarded {
             estimating = true
-            estimatedSize = ConversionEngine.estimateOutputSize(source, format, options)
-            estimating = false
+            try {
+                estimatedSize = ConversionEngine.estimateOutputSize(source, format, options)
+            } finally {
+                estimating = false
+            }
         }
     }
 
@@ -193,14 +230,20 @@ class ConverterState(
         queue.addAll(selection.map { QueueItem(it) })
         stage = Stage.RUNNING
 
-        conversionJob = scope.launch {
-            if (canMergeToPdf && format == TargetFormat.PDF && options.mergeIntoSinglePdf) {
-                runMerged()
-            } else {
-                runQueue(format)
+        conversionJob = launchGuarded {
+            try {
+                if (canMergeToPdf && format == TargetFormat.PDF && options.mergeIntoSinglePdf) {
+                    runMerged()
+                } else {
+                    runQueue(format)
+                }
+            } finally {
+                // L'écran de résultat doit apparaître même si la conversion
+                // s'est interrompue : sans cela l'utilisateur reste bloqué sur
+                // une progression figée.
+                stage = Stage.RESULT
+                runCatching { refreshHistory() }
             }
-            stage = Stage.RESULT
-            refreshHistory()
         }
     }
 
@@ -222,7 +265,7 @@ class ConverterState(
                     if (error is ConversionCancelled || error is kotlinx.coroutines.CancellationException) {
                         updateItem(index, ItemState.Cancelled)
                     } else {
-                        val text = error.message ?: "La conversion a échoué"
+                        val text = readableMessage(error)
                         updateItem(index, ItemState.Failed(text))
                         record(source, null, text)
                     }
@@ -240,15 +283,15 @@ class ConverterState(
             .onSuccess { output ->
                 selection.indices.forEach { updateItem(it, ItemState.Done(output)) }
                 results.add(output)
-                record(selection.first(), output, null)
+                selection.firstOrNull()?.let { record(it, output, null) }
             }
             .onFailure { error ->
                 if (error is ConversionCancelled || error is kotlinx.coroutines.CancellationException) {
                     selection.indices.forEach { updateItem(it, ItemState.Cancelled) }
                 } else {
-                    val text = error.message ?: "La conversion a échoué"
+                    val text = readableMessage(error)
                     selection.indices.forEach { updateItem(it, ItemState.Failed(text)) }
-                    record(selection.first(), null, text)
+                    selection.firstOrNull()?.let { record(it, null, text) }
                 }
             }
     }
@@ -257,7 +300,7 @@ class ConverterState(
         if (index in queue.indices) queue[index] = queue[index].copy(state = state)
     }
 
-    private fun record(source: SourceFile, output: OutputFile?, failure: String?) {
+    private fun record(source: SourceFile, output: OutputFile?, failure: String?) = runCatching {
         history.record(
             HistoryEntry(
                 id = history.newId(),
@@ -293,7 +336,7 @@ class ConverterState(
         sourceWarning = null
         stage = Stage.PICK
         tab = ConverterTab.HOME
-        scope.launch(Dispatchers.IO) { OutputStore.clearSourceCache(context) }
+        launchGuarded { withContext(Dispatchers.IO) { OutputStore.clearSourceCache(context) } }
     }
 
     fun backToConfigure() {
@@ -301,8 +344,9 @@ class ConverterState(
     }
 
     fun refreshHistory() {
+        val entries = runCatching { history.list() }.getOrDefault(emptyList())
         historyEntries.clear()
-        historyEntries.addAll(history.list())
+        historyEntries.addAll(entries)
     }
 
     fun deleteHistory(id: String) {

@@ -34,19 +34,41 @@ private val MP4_AUDIO_MIMES = setOf("audio/mp4a-latm", "audio/3gpp", "audio/amr-
  */
 object MediaProbe {
 
-    fun inspect(file: File, kind: FileKind, extension: String): ProbeResult = when (kind) {
-        FileKind.IMAGE -> probeImage(file, extension)
-        FileKind.PDF -> probePdf(file)
-        FileKind.AUDIO, FileKind.VIDEO -> probeMedia(file, kind, extension)
-        FileKind.TEXT -> probeText(file, extension)
-        FileKind.ARCHIVE, FileKind.OTHER -> ProbeResult(listOf(TargetFormat.ZIP), null)
+    /**
+     * Toute sonde qui échoue ramène le fichier au seul traitement qui marche
+     * toujours, la compression. Un imprévu sur un décodeur du système ne doit
+     * jamais empêcher d'ouvrir l'écran de conversion.
+     */
+    fun inspect(file: File, kind: FileKind, extension: String): ProbeResult = runCatching {
+        when (kind) {
+            FileKind.IMAGE -> probeImage(file, extension)
+            FileKind.PDF -> probePdf(file)
+            FileKind.AUDIO, FileKind.VIDEO -> probeMedia(file, kind, extension)
+            FileKind.TEXT -> probeText(file, extension)
+            FileKind.ARCHIVE, FileKind.OTHER -> ProbeResult(listOf(TargetFormat.ZIP), null)
+        }
+    }.getOrElse {
+        ProbeResult(
+            listOf(TargetFormat.ZIP),
+            null,
+            "Ce fichier n'a pas pu être analysé ; il peut encore être compressé"
+        )
     }
 
+    /**
+     * Lit les dimensions sans charger les pixels. Le décodeur ne se contente
+     * pas toujours de rendre `null` sur un fichier abîmé : il lui arrive de
+     * lever une erreur, qui ne doit pas dépasser la sonde.
+     */
     private fun probeImage(file: File, extension: String): ProbeResult {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        runCatching { BitmapFactory.decodeFile(file.absolutePath, bounds) }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-            return ProbeResult(listOf(TargetFormat.ZIP), null, "Cette image n'a pas pu être lue")
+            return ProbeResult(
+                listOf(TargetFormat.ZIP),
+                null,
+                "Cette image est abîmée ou dans un format que l'appareil ne sait pas lire"
+            )
         }
         return ProbeResult(
             candidateTargets(FileKind.IMAGE, extension),
@@ -66,9 +88,25 @@ object MediaProbe {
         return ProbeResult(candidateTargets(FileKind.PDF, "pdf"), detail)
     }
 
+    /**
+     * Compte les lignes en lisant le fichier en flux. Le charger entièrement
+     * pour un simple décompte suffirait à faire tomber l'application sur un
+     * journal de plusieurs centaines de mégaoctets.
+     */
     private fun probeText(file: File, extension: String): ProbeResult {
-        val lines = runCatching { file.readLines().size }.getOrNull()
-        val detail = lines?.let { if (it <= 1) "$it ligne" else "$it lignes" }
+        val lines = runCatching {
+            file.bufferedReader().use { reader ->
+                var count = 0
+                while (reader.readLine() != null && count < MAX_COUNTED_LINES) count++
+                count
+            }
+        }.getOrNull()
+        val detail = when {
+            lines == null -> null
+            lines >= MAX_COUNTED_LINES -> "plus de $MAX_COUNTED_LINES lignes"
+            lines <= 1 -> "$lines ligne"
+            else -> "$lines lignes"
+        }
         return ProbeResult(candidateTargets(FileKind.TEXT, extension), detail)
     }
 
@@ -163,6 +201,8 @@ object MediaProbe {
             runCatching { retriever.release() }
         }
     }
+
+    private const val MAX_COUNTED_LINES = 200_000
 
     private fun hasDecoder(mime: String): Boolean = runCatching {
         val format = MediaFormat.createAudioFormat(mime, 44_100, 2)

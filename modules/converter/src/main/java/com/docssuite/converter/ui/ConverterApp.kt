@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -196,7 +197,9 @@ private fun ConverterScaffold(state: ConverterState, onBack: () -> Unit) {
                         }
                     }
                 }
-                Box(modifier = Modifier.fillMaxSize()) {
+                // `weight` et non `fillMaxSize` : à côté du rail de navigation,
+                // remplir la largeur du parent pousserait le contenu hors écran.
+                Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
                     // Sur tablette l'interface ne s'étire pas : elle reste dans
                     // une colonne lisible, centrée dans l'espace disponible.
                     Box(
