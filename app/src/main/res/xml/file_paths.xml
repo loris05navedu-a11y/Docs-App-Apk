@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <!-- Seul ce dossier est exposé : les fichiers que l'app vient d'exporter. -->
+    <!-- Seuls ces dossiers sont exposés : les fichiers que l'app vient de
+         produire, à l'export ou à la conversion. -->
     <cache-path name="partage" path="partage/" />
+    <files-path name="conversions" path="conversions/" />
 </paths>

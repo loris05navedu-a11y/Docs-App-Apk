@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Slideshow
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -77,6 +78,7 @@ fun HomeScreen(
     onOpenPresentation: (String?) -> Unit,
     onOpenPdf: (PdfPayload?) -> Unit,
     onOpenMedia: () -> Unit,
+    onOpenConverter: () -> Unit,
     incomingFile: Uri? = null,
     onIncomingHandled: () -> Unit = {}
 ) {
@@ -220,7 +222,7 @@ fun HomeScreen(
             item {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    "Ouvrir",
+                    "Ouvrir et convertir",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -232,6 +234,15 @@ fun HomeScreen(
                     Icons.Filled.FolderOpen,
                     Color(0xFF0F766E)
                 ) { opener.open() }
+            }
+            item {
+                AppCard(
+                    "File Converter",
+                    "Images, PDF, audio et vidéo — hors ligne, sur l'appareil",
+                    Icons.Filled.SwapHoriz,
+                    Color(0xFF4F46E5),
+                    onClick = onOpenConverter
+                )
             }
 
             if (documents.isNotEmpty()) {

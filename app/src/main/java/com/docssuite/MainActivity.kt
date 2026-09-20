@@ -16,6 +16,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.docssuite.converter.ui.FileConverterScreen
 import com.docssuite.core.DocumentStorage
 import com.docssuite.fileformats.TextDocument
 import com.docssuite.fileformats.TextParagraph
@@ -111,6 +112,7 @@ fun DocsSuiteApp(
                 onOpenPresentation = { navController.navigate(route("presentation", it)) },
                 onOpenPdf = ::openPdf,
                 onOpenMedia = { navController.navigate("media") },
+                onOpenConverter = { navController.navigate("converter") },
                 incomingFile = incomingFile,
                 onIncomingHandled = onIncomingHandled
             )
@@ -142,6 +144,9 @@ fun DocsSuiteApp(
         }
         composable("media") {
             MediaPlayerScreen(onBack = { navController.popBackStack() })
+        }
+        composable("converter") {
+            FileConverterScreen(onBack = { navController.popBackStack() })
         }
     }
 }

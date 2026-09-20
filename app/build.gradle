@@ -52,4 +52,5 @@ dependencies {
     implementation project(':modules:presentation')
     implementation project(':modules:pdf')
     implementation project(':modules:media')
+    implementation project(':modules:converter')
 }
