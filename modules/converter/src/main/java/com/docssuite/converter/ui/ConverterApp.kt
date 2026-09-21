@@ -87,7 +87,7 @@ fun FileConverterScreen(onBack: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ConverterScaffold(state: ConverterState, onBack: () -> Unit) {
+internal fun ConverterScaffold(state: ConverterState, onBack: () -> Unit) {
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     var pendingSave by remember { mutableStateOf<OutputFile?>(null) }

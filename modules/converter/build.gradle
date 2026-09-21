@@ -45,6 +45,6 @@ dependencies {
     // Le rendu d'écrans en test réclame une activité hôte, fournie par
     // `ui-test-manifest`, qui n'existe qu'en debug : ces tests vivent donc
     // dans `src/testDebug`.
-    testDebugImplementation 'androidx.compose.ui:ui-test-junit4:1.6.0'
-    debugImplementation 'androidx.compose.ui:ui-test-manifest:1.6.0'
+    testDebugImplementation 'androidx.compose.ui:ui-test-junit4'
+    debugImplementation 'androidx.compose.ui:ui-test-manifest'
 }
