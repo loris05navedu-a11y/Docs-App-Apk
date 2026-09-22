@@ -12,11 +12,13 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,6 +35,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Notes
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Animation
 import androidx.compose.material.icons.filled.ArrowBack
@@ -48,6 +51,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Divider
@@ -123,7 +127,8 @@ internal data class Slide(
     val contentSize: Int = 20,
     val align: Int = 1,
     val fontIndex: Int = 0,
-    val transition: Int = 1
+    val transition: Int = 1,
+    val notes: String = ""
 )
 
 private val TransitionNames = listOf(
@@ -664,6 +669,14 @@ private fun SlideEditorCard(
                     modifier = Modifier.fillMaxWidth().height(110.dp),
                     label = { Text("Contenu") }
                 )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = slide.notes,
+                    onValueChange = { onChange(slide.copy(notes = it)) },
+                    modifier = Modifier.fillMaxWidth().height(90.dp),
+                    label = { Text("Notes du présentateur") },
+                    supportingText = { Text("Visibles pendant le diaporama, jamais projetées") }
+                )
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -735,6 +748,7 @@ private fun transitionFor(kind: Int, forward: Boolean): ContentTransform {
 private fun SlideShow(slides: List<Slide>, onExit: () -> Unit) {
     var index by remember { mutableStateOf(0) }
     var forward by remember { mutableStateOf(true) }
+    var showNotes by remember { mutableStateOf(false) }
     val slide = slides.getOrNull(index) ?: return
 
     Dialog(
@@ -805,15 +819,55 @@ private fun SlideShow(slides: List<Slide>, onExit: () -> Unit) {
                 }
             }
 
-            IconButton(
-                onClick = onExit,
-                modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)
-            ) {
-                Icon(
-                    Icons.Filled.Close,
-                    contentDescription = "Quitter le diaporama",
-                    tint = Color(slide.textColor).copy(alpha = 0.7f)
-                )
+            Row(modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)) {
+                if (slides.any { it.notes.isNotBlank() }) {
+                    IconButton(onClick = { showNotes = !showNotes }) {
+                        Icon(
+                            Icons.Filled.Notes,
+                            contentDescription = if (showNotes) "Masquer les notes" else "Afficher les notes",
+                            tint = Color(slide.textColor)
+                                .copy(alpha = if (showNotes) 1f else 0.7f)
+                        )
+                    }
+                }
+                IconButton(onClick = onExit) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = "Quitter le diaporama",
+                        tint = Color(slide.textColor).copy(alpha = 0.7f)
+                    )
+                }
+            }
+
+            // Les notes se posent par-dessus la diapositive, sur un fond opaque :
+            // elles ne doivent jamais se confondre avec le contenu projeté.
+            if (showNotes && slide.notes.isNotBlank()) {
+                Surface(
+                    color = Color(0xE6101828),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(start = 20.dp, end = 20.dp, bottom = 56.dp)
+                        .fillMaxWidth(0.9f)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text(
+                            "Notes",
+                            color = Color(0xFF9CA3AF),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            slide.notes,
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            modifier = Modifier
+                                .heightIn(max = 160.dp)
+                                .verticalScroll(rememberScrollState())
+                        )
+                    }
+                }
             }
 
             Row(
@@ -870,6 +924,7 @@ internal fun encodeDeck(slides: List<Slide>): String {
             put("al", slide.align)
             put("fi", slide.fontIndex)
             put("tr", slide.transition)
+            put("nt", slide.notes)
         })
     }
     return JSONObject().apply { put("slides", array) }.toString()
@@ -890,7 +945,8 @@ internal fun decodeDeck(payload: String): List<Slide> {
                 contentSize = o.optInt("cs", 20),
                 align = o.optInt("al", 1),
                 fontIndex = o.optInt("fi", 0),
-                transition = o.optInt("tr", 1)
+                transition = o.optInt("tr", 1),
+                notes = o.optString("nt")
             )
         )
     }

@@ -83,7 +83,9 @@ data class SlideModel(
     val contentSize: Int = 20,
     /** 0 = gauche, 1 = centre, 2 = droite. */
     val align: Int = 1,
-    val fontName: String = ""
+    val fontName: String = "",
+    /** Commentaire du présentateur, jamais projeté à l'écran. */
+    val notes: String = ""
 )
 
 data class Deck(

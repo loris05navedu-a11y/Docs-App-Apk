@@ -2,71 +2,102 @@ package com.docssuite.core
 
 import java.util.Locale
 import kotlin.math.abs
-import kotlin.math.ln
-import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.roundToLong
-import kotlin.math.sqrt
 
-private class CycleException : RuntimeException()
+internal class CycleException : RuntimeException()
+
+/** Groupe de fonctions présenté dans l'aide du tableur. */
+data class FunctionGroup(val title: String, val entries: List<FunctionHelp>)
+
+data class FunctionHelp(val signature: String, val description: String) {
+    /** Nom seul, pour insérer la fonction dans la barre de formule. */
+    val name: String get() = signature.substringBefore('(')
+}
 
 /**
- * Moteur de formules du tableur : arithmétique, références de cellules (A1),
- * plages (A1:B5), comparaisons et fonctions nommées (français + anglais).
+ * Moteur de formules du tableur : arithmétique, références (A1), plages
+ * (A1:B5), texte entre guillemets, comparaisons et fonctions nommées, en
+ * français comme en anglais.
  */
 object FormulaEngine {
 
-    val FUNCTIONS = listOf(
-        "SOMME", "MOYENNE", "MIN", "MAX", "NB", "PRODUIT", "MEDIANE",
-        "QUARTILE", "ECARTYPE", "ABS", "ARRONDI", "RACINE", "PUISSANCE",
-        "SI", "ENT", "MOD", "LOG", "EXP"
-    )
+    /** Aide affichée dans l'assistant de formules. */
+    val CATALOG: List<FunctionGroup> = FormulaFunctions.CATALOG
+
+    /** Noms proposés en saisie rapide. */
+    val FUNCTIONS: List<String> = CATALOG.flatMap { group -> group.entries.map { it.name } }
 
     /**
-     * Évalue une expression libre (calculatrice). Les références de cellules
-     * sont résolues si [cells] est fourni. Renvoie null si l'expression est invalide.
+     * Évalue une expression libre (calculatrice). Renvoie `null` si le résultat
+     * n'est pas un nombre exploitable.
      */
     fun evaluateExpression(expression: String, cells: Map<String, String> = emptyMap()): Double? {
+        val value = evaluate(expression, cells) ?: return null
+        return value.strictNumber()?.takeIf { it.isFinite() }
+    }
+
+    /** Évalue une expression et rend la valeur typée, ou `null` si elle est invalide. */
+    fun evaluate(expression: String, cells: Map<String, String> = emptyMap()): Value? {
         val cleaned = expression.trim().removePrefix("=").trim()
         if (cleaned.isEmpty()) return null
         return try {
-            Parser(cleaned, cells, HashSet()).parse().takeIf { it.isFinite() }
-        } catch (e: Exception) {
+            Parser(cleaned, cells, HashSet()).parseAll()
+        } catch (cycle: CycleException) {
+            Value.CYCLE
+        } catch (error: Exception) {
             null
         }
     }
 
-    /** Valeur affichée d'une cellule (évalue la formule si elle commence par "="). */
+    /** Valeur affichée d'une cellule ; évalue la formule si elle commence par `=`. */
     fun displayValue(ref: String, cells: Map<String, String>): String {
         val raw = cells[ref] ?: return ""
         if (!raw.startsWith("=")) return raw
         return try {
-            formatNumber(Parser(raw.substring(1), cells, hashSetOf(ref)).parse())
-        } catch (e: CycleException) {
+            Parser(raw.substring(1), cells, hashSetOf(ref)).parseAll().asText()
+        } catch (cycle: CycleException) {
             "#CYCLE"
-        } catch (e: Exception) {
+        } catch (error: Exception) {
             "#ERREUR"
         }
     }
 
-    internal fun numberAt(ref: String, cells: Map<String, String>, visiting: MutableSet<String>): Double {
+    /** Valeur typée d'une cellule, utilisée par les fonctions et les graphiques. */
+    internal fun valueAt(
+        ref: String,
+        cells: Map<String, String>,
+        visiting: MutableSet<String>
+    ): Value {
         if (!visiting.add(ref)) throw CycleException()
         try {
-            val raw = cells[ref]?.trim() ?: return 0.0
-            if (raw.isEmpty()) return 0.0
+            val raw = cells[ref]?.trim() ?: return Value.Blank
+            if (raw.isEmpty()) return Value.Blank
             return if (raw.startsWith("=")) {
-                Parser(raw.substring(1), cells, visiting).parse()
+                try {
+                    Parser(raw.substring(1), cells, visiting).parseAll()
+                } catch (cycle: CycleException) {
+                    throw cycle
+                } catch (error: Exception) {
+                    Value.VALUE
+                }
             } else {
-                raw.replace(" ", "").replace(',', '.').toDoubleOrNull() ?: 0.0
+                Value.literal(raw)
             }
         } finally {
             visiting.remove(ref)
         }
     }
 
+    internal fun numberAt(
+        ref: String,
+        cells: Map<String, String>,
+        visiting: MutableSet<String>
+    ): Double = valueAt(ref, cells, visiting).asNumber() ?: 0.0
+
     fun formatNumber(v: Double): String {
         if (v.isNaN() || v.isInfinite()) return "#ERREUR"
-        if (abs(v - v.roundToLong()) < 1e-9) return v.roundToLong().toString()
+        if (abs(v) < 1e15 && abs(v - v.roundToLong()) < 1e-9) return v.roundToLong().toString()
         return String.format(Locale.US, "%.4f", v).trimEnd('0').trimEnd('.')
     }
 
@@ -84,7 +115,7 @@ object FormulaEngine {
 
     fun columnIndex(label: String): Int {
         var n = 0
-        for (c in label.uppercase()) {
+        for (c in label.uppercase(Locale.ROOT)) {
             if (!c.isLetter()) break
             n = n * 26 + (c - 'A' + 1)
         }
@@ -133,14 +164,47 @@ object FormulaEngine {
     }
 }
 
-private class Parser(
+/**
+ * Argument d'une fonction. Une plage garde sa forme rectangulaire : sans elle,
+ * ni RECHERCHEV ni INDEX ne sauraient où chercher.
+ */
+internal sealed interface Arg {
+    data class One(val value: Value) : Arg
+    data class Range(val grid: List<List<Value>>) : Arg
+}
+
+internal fun List<Arg>.values(): List<Value> = flatMap { arg ->
+    when (arg) {
+        is Arg.One -> listOf(arg.value)
+        is Arg.Range -> arg.grid.flatten()
+    }
+}
+
+/** Nombres au sens d'Excel : les textes et les cases vides sont ignorés. */
+internal fun List<Arg>.numbers(): List<Double> = values().mapNotNull { it.strictNumber() }
+
+internal fun List<Arg>.value(index: Int): Value = when (val arg = getOrNull(index)) {
+    is Arg.One -> arg.value
+    is Arg.Range -> arg.grid.flatten().firstOrNull() ?: Value.Blank
+    null -> Value.Blank
+}
+
+/**
+ * Argument facultatif : `null` s'il n'a pas été écrit. Sans cette distinction,
+ * une case vide vaut zéro et l'on ne peut plus différencier « argument omis »
+ * de « argument valant 0 » — INDEX(plage;3) désignerait alors la colonne 0.
+ */
+internal fun List<Arg>.optionalNumber(index: Int): Double? =
+    if (index < size) value(index).takeIf { it != Value.Blank }?.asNumber() else null
+
+internal class Parser(
     private val src: String,
     private val cells: Map<String, String>,
     private val visiting: MutableSet<String>
 ) {
     private var pos = 0
 
-    fun parse(): Double {
+    fun parseAll(): Value {
         val v = parseComparison()
         skipWs()
         if (pos < src.length) throw IllegalArgumentException("Caractère inattendu")
@@ -151,70 +215,115 @@ private class Parser(
         while (pos < src.length && src[pos].isWhitespace()) pos++
     }
 
-    private fun parseComparison(): Double {
-        val left = parseExpr()
+    private fun parseComparison(): Value {
+        val left = parseConcat()
         skipWs()
         for (op in listOf("<>", ">=", "<=", ">", "<", "=")) {
             if (src.startsWith(op, pos)) {
                 pos += op.length
-                val right = parseExpr()
-                val result = when (op) {
-                    "<>" -> abs(left - right) >= 1e-9
-                    ">=" -> left >= right
-                    "<=" -> left <= right
-                    ">" -> left > right
-                    "<" -> left < right
-                    else -> abs(left - right) < 1e-9
-                }
-                return if (result) 1.0 else 0.0
+                val right = parseConcat()
+                if (left.isError) return left
+                if (right.isError) return right
+                return Value.of(compare(left, right, op))
             }
         }
         return left
     }
 
-    private fun parseExpr(): Double {
+    private fun compare(left: Value, right: Value, op: String): Boolean {
+        val a = left.strictNumber()
+        val b = right.strictNumber()
+        // Deux nombres se comparent numériquement ; dès qu'un texte entre en
+        // jeu, la comparaison se fait sur le libellé, sans tenir compte de la
+        // casse, comme dans un tableur.
+        val result = if (a != null && b != null) a.compareTo(b)
+        else left.asText().compareTo(right.asText(), ignoreCase = true)
+        return when (op) {
+            "<>" -> result != 0
+            ">=" -> result >= 0
+            "<=" -> result <= 0
+            ">" -> result > 0
+            "<" -> result < 0
+            else -> result == 0
+        }
+    }
+
+    /** `&` colle deux valeurs bout à bout, comme dans Excel. */
+    private fun parseConcat(): Value {
+        var v = parseExpr()
+        while (true) {
+            skipWs()
+            if (pos < src.length && src[pos] == '&') {
+                pos++
+                val r = parseExpr()
+                if (v.isError) return v
+                if (r.isError) return r
+                v = Value.Txt(v.asText() + r.asText())
+            } else return v
+        }
+    }
+
+    private fun parseExpr(): Value {
         var v = parseTerm()
         while (true) {
             skipWs()
             if (pos < src.length && (src[pos] == '+' || src[pos] == '-')) {
                 val op = src[pos]; pos++
                 val r = parseTerm()
-                v = if (op == '+') v + r else v - r
+                v = arithmetic(v, r) { a, b -> if (op == '+') a + b else a - b }
             } else return v
         }
     }
 
-    private fun parseTerm(): Double {
+    private fun parseTerm(): Value {
         var v = parsePower()
         while (true) {
             skipWs()
             if (pos < src.length && (src[pos] == '*' || src[pos] == '/')) {
                 val op = src[pos]; pos++
                 val r = parsePower()
-                if (op == '/' && r == 0.0) throw ArithmeticException("Division par zéro")
-                v = if (op == '*') v * r else v / r
+                if (op == '/' && r.asNumber() == 0.0) return Value.DIV0
+                v = arithmetic(v, r) { a, b -> if (op == '*') a * b else a / b }
             } else return v
         }
     }
 
-    private fun parsePower(): Double {
+    private fun parsePower(): Value {
         val base = parseUnary()
         skipWs()
         if (pos < src.length && src[pos] == '^') {
             pos++
-            return base.pow(parsePower())
+            return arithmetic(base, parsePower()) { a, b -> a.pow(b) }
         }
         return base
     }
 
-    private fun parseUnary(): Double {
+    private fun parseUnary(): Value {
         skipWs()
-        if (pos < src.length && src[pos] == '-') { pos++; return -parseUnary() }
+        if (pos < src.length && src[pos] == '-') {
+            pos++
+            return arithmetic(Value.Num(0.0), parseUnary()) { a, b -> a - b }
+        }
         if (pos < src.length && src[pos] == '+') { pos++; return parseUnary() }
-        return parsePrimary()
+        if (pos < src.length && src[pos] == '%') throw IllegalArgumentException("'%' isolé")
+        val v = parsePrimary()
+        skipWs()
+        if (pos < src.length && src[pos] == '%') {
+            pos++
+            return arithmetic(v, Value.Num(100.0)) { a, b -> a / b }
+        }
+        return v
     }
 
-    private fun parsePrimary(): Double {
+    private inline fun arithmetic(a: Value, b: Value, op: (Double, Double) -> Double): Value {
+        if (a.isError) return a
+        if (b.isError) return b
+        val x = a.asNumber() ?: return Value.VALUE
+        val y = b.asNumber() ?: return Value.VALUE
+        return Value.of(op(x, y))
+    }
+
+    private fun parsePrimary(): Value {
         skipWs()
         if (pos >= src.length) throw IllegalArgumentException("Formule incomplète")
         val c = src[pos]
@@ -222,47 +331,76 @@ private class Parser(
             pos++
             val v = parseComparison()
             skipWs()
-            if (pos < src.length && src[pos] == ')') pos++ else throw IllegalArgumentException("')' manquante")
+            if (pos < src.length && src[pos] == ')') pos++
+            else throw IllegalArgumentException("')' manquante")
             return v
         }
+        if (c == '"') return parseString()
         if (c.isDigit() || c == '.') return parseNumber()
-        if (c.isLetter()) return parseNameOrRef()
+        if (c.isLetter() || c == '_') return parseNameOrRef()
         throw IllegalArgumentException("Caractère '$c'")
     }
 
-    private fun parseNumber(): Double {
-        val start = pos
-        while (pos < src.length && (src[pos].isDigit() || src[pos] == '.')) pos++
-        return src.substring(start, pos).toDouble()
+    /** Texte entre guillemets ; `""` à l'intérieur insère un guillemet. */
+    private fun parseString(): Value {
+        pos++
+        val sb = StringBuilder()
+        while (pos < src.length) {
+            val ch = src[pos]
+            if (ch == '"') {
+                if (pos + 1 < src.length && src[pos + 1] == '"') {
+                    sb.append('"'); pos += 2; continue
+                }
+                pos++
+                return Value.Txt(sb.toString())
+            }
+            sb.append(ch); pos++
+        }
+        throw IllegalArgumentException("Guillemet fermant manquant")
     }
 
-    private fun parseNameOrRef(): Double {
+    private fun parseNumber(): Value {
         val start = pos
-        while (pos < src.length && (src[pos].isLetterOrDigit() || src[pos] == '_')) pos++
-        val name = src.substring(start, pos)
+        while (pos < src.length && (src[pos].isDigit() || src[pos] == '.')) pos++
+        return Value.Num(src.substring(start, pos).toDouble())
+    }
+
+    private fun parseNameOrRef(): Value {
+        val start = pos
+        // Le point fait partie des noms français : NB.SI, ARRONDI.SUP…
+        while (pos < src.length && (src[pos].isLetterOrDigit() || src[pos] == '_' || src[pos] == '.')) pos++
+        var name = src.substring(start, pos)
         skipWs()
         if (pos < src.length && src[pos] == '(') {
             pos++
-            val args = ArrayList<Double>()
+            val args = ArrayList<Arg>()
             skipWs()
             if (pos < src.length && src[pos] == ')') {
                 pos++
             } else {
                 while (true) {
-                    args.addAll(parseArgument())
+                    args.add(parseArgument())
                     skipWs()
                     if (pos < src.length && (src[pos] == ';' || src[pos] == ',')) { pos++; continue }
                     if (pos < src.length && src[pos] == ')') { pos++; break }
                     throw IllegalArgumentException("Arguments invalides")
                 }
             }
-            return applyFunction(name.uppercase(Locale.ROOT), args)
+            return FormulaFunctions.apply(name.uppercase(Locale.ROOT), args)
+        }
+        // Une référence ne contient pas de point : on le rend à l'expression.
+        if (name.contains('.') && name.substringBefore('.').isNotEmpty()) {
+            val head = name.substringBefore('.')
+            if (FormulaEngine.isCellRef(head)) {
+                pos = start + head.length
+                name = head
+            }
         }
         return constantOrRef(name)
     }
 
     /** Un argument peut être une plage A1:B3, sinon c'est une expression. */
-    private fun parseArgument(): List<Double> {
+    private fun parseArgument(): Arg {
         val save = pos
         skipWs()
         val start = pos
@@ -281,81 +419,43 @@ private class Parser(
                     val colEnd2 = pos
                     while (pos < src.length && src[pos].isDigit()) pos++
                     if (colEnd2 < pos) {
-                        return rangeValues(src.substring(start, refEnd), src.substring(start2, pos))
+                        return Arg.Range(grid(src.substring(start, refEnd), src.substring(start2, pos)))
                     }
                 }
             }
         }
         pos = save
-        return listOf(parseComparison())
+        return Arg.One(parseComparison())
     }
 
-    private fun rangeValues(from: String, to: String): List<Double> {
+    private fun grid(from: String, to: String): List<List<Value>> {
         val c1 = FormulaEngine.columnIndex(from.takeWhile { it.isLetter() })
         val r1 = from.dropWhile { it.isLetter() }.toInt() - 1
         val c2 = FormulaEngine.columnIndex(to.takeWhile { it.isLetter() })
         val r2 = to.dropWhile { it.isLetter() }.toInt() - 1
-        val out = ArrayList<Double>()
+        val rows = ArrayList<List<Value>>()
         for (r in minOf(r1, r2)..maxOf(r1, r2)) {
+            val row = ArrayList<Value>()
             for (c in minOf(c1, c2)..maxOf(c1, c2)) {
-                out.add(FormulaEngine.numberAt(FormulaEngine.cellKey(r, c), cells, visiting))
+                row.add(FormulaEngine.valueAt(FormulaEngine.cellKey(r, c), cells, visiting))
             }
+            rows.add(row)
         }
-        return out
+        return rows
     }
 
-    private fun constantOrRef(name: String): Double {
+    private fun constantOrRef(name: String): Value {
         when (name.uppercase(Locale.ROOT)) {
-            "PI" -> return Math.PI
-            "E" -> return Math.E
-            "VRAI", "TRUE" -> return 1.0
-            "FAUX", "FALSE" -> return 0.0
+            "PI" -> return Value.Num(Math.PI)
+            "E" -> return Value.Num(Math.E)
+            "VRAI", "TRUE" -> return Value.TRUE
+            "FAUX", "FALSE" -> return Value.FALSE
         }
         val letters = name.takeWhile { it.isLetter() }
         val digits = name.dropWhile { it.isLetter() }
         if (letters.isEmpty() || digits.isEmpty() || !digits.all { it.isDigit() }) {
             throw IllegalArgumentException("Référence invalide : $name")
         }
-        return FormulaEngine.numberAt(name.uppercase(Locale.ROOT), cells, visiting)
-    }
-
-    private fun applyFunction(name: String, args: List<Double>): Double = when (name) {
-        "SOMME", "SUM" -> args.sum()
-        "MOYENNE", "AVERAGE", "AVG" -> if (args.isEmpty()) 0.0 else args.sum() / args.size
-        "MIN" -> args.minOrNull() ?: 0.0
-        "MAX" -> args.maxOrNull() ?: 0.0
-        "NB", "COUNT" -> args.size.toDouble()
-        "PRODUIT", "PRODUCT" -> args.fold(1.0) { a, b -> a * b }
-        "MEDIANE", "MEDIAN" -> {
-            if (args.isEmpty()) 0.0 else {
-                val s = args.sorted()
-                if (s.size % 2 == 1) s[s.size / 2] else (s[s.size / 2 - 1] + s[s.size / 2]) / 2
-            }
-        }
-        "QUARTILE" -> {
-            // Même ordre d'arguments qu'Excel : QUARTILE(plage; n) avec n de 0 à 4.
-            val rank = args.last().toInt().coerceIn(0, 4)
-            quantile(args.dropLast(1).sorted(), rank / 4.0)
-        }
-        "ECARTYPE", "STDEV" -> {
-            if (args.size < 2) 0.0 else {
-                val mean = args.sum() / args.size
-                sqrt(args.sumOf { (it - mean) * (it - mean) } / (args.size - 1))
-            }
-        }
-        "ABS" -> abs(args.first())
-        "ARRONDI", "ROUND" -> {
-            val decimals = if (args.size > 1) args[1].toInt() else 0
-            val factor = 10.0.pow(decimals)
-            (args.first() * factor).roundToLong() / factor
-        }
-        "ENT", "INT" -> kotlin.math.floor(args.first())
-        "RACINE", "SQRT" -> sqrt(args.first())
-        "PUISSANCE", "POW", "POWER" -> args[0].pow(args[1])
-        "MOD" -> args[0] % args[1]
-        "LOG" -> if (args.size > 1) ln(args[0]) / ln(args[1]) else log10(args[0])
-        "EXP" -> Math.E.pow(args.first())
-        "SI", "IF" -> if (args[0] != 0.0) args[1] else args.getOrElse(2) { 0.0 }
-        else -> throw IllegalArgumentException("Fonction inconnue : $name")
+        return FormulaEngine.valueAt(name.uppercase(Locale.ROOT), cells, visiting)
     }
 }

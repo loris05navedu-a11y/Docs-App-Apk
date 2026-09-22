@@ -126,6 +126,10 @@ fun TextEditorScreen(onBack: () -> Unit, initialDocId: String? = null) {
     var showRename by remember { mutableStateOf(false) }
     var showOpen by remember { mutableStateOf(false) }
     var showStats by remember { mutableStateOf(false) }
+    var showFind by remember { mutableStateOf(false) }
+    var findQuery by remember { mutableStateOf("") }
+    var findReplacement by remember { mutableStateOf("") }
+    var findMatchCase by remember { mutableStateOf(false) }
     var showClearConfirm by remember { mutableStateOf(false) }
     var showExport by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -307,6 +311,10 @@ fun TextEditorScreen(onBack: () -> Unit, initialDocId: String? = null) {
                                 onClick = { showMenu = false; shareText(context, docName, value.text) }
                             )
                             DropdownMenuItem(
+                                text = { Text("Rechercher et remplacer") },
+                                onClick = { showMenu = false; showFind = true }
+                            )
+                            DropdownMenuItem(
                                 text = { Text("Statistiques") },
                                 onClick = { showMenu = false; showStats = true }
                             )
@@ -440,6 +448,63 @@ fun TextEditorScreen(onBack: () -> Unit, initialDocId: String? = null) {
                         }
                     }
                 }
+            }
+
+            if (showFind) {
+                FindReplaceBar(
+                    query = findQuery,
+                    replacement = findReplacement,
+                    matchCase = findMatchCase,
+                    occurrences = TextSearch.count(value.text, findQuery, findMatchCase),
+                    onQueryChange = { findQuery = it },
+                    onReplacementChange = { findReplacement = it },
+                    onMatchCaseChange = { findMatchCase = it },
+                    onFind = { forward ->
+                        val range = if (forward) {
+                            TextSearch.findNext(value.text, findQuery, value.selection.max, findMatchCase)
+                        } else {
+                            TextSearch.findPrevious(value.text, findQuery, value.selection.min, findMatchCase)
+                        }
+                        if (range == null) {
+                            notice = "Recherche" to "« $findQuery » est introuvable."
+                        } else {
+                            value = value.copy(selection = TextRange(range.first, range.last + 1))
+                        }
+                    },
+                    onReplace = {
+                        val selection = value.selection
+                        val selected = value.text.substring(selection.min, selection.max)
+                        // On ne remplace que si la sélection est bien l'occurrence
+                        // en cours ; sinon on s'y rend d'abord.
+                        if (selected.equals(findQuery, ignoreCase = !findMatchCase) && findQuery.isNotEmpty()) {
+                            pushUndo()
+                            val result = TextSearch.replaceRange(
+                                value.text, styles, selection.min until selection.max, findReplacement
+                            )
+                            styles = result.styles
+                            value = TextFieldValue(result.text, TextRange(result.caret))
+                        } else {
+                            TextSearch.findNext(value.text, findQuery, selection.max, findMatchCase)
+                                ?.let { value = value.copy(selection = TextRange(it.first, it.last + 1)) }
+                        }
+                    },
+                    onReplaceAll = {
+                        val result = TextSearch.replaceAll(
+                            value.text, styles, findQuery, findReplacement, findMatchCase
+                        )
+                        if (result.count == 0) {
+                            notice = "Remplacement" to "« $findQuery » est introuvable."
+                        } else {
+                            pushUndo()
+                            styles = result.styles
+                            value = TextFieldValue(result.text, TextRange(result.caret))
+                            notice = "Remplacement" to
+                                if (result.count == 1) "1 occurrence remplacée."
+                                else "${result.count} occurrences remplacées."
+                        }
+                    },
+                    onClose = { showFind = false }
+                )
             }
 
             // --- Zone d'édition ---

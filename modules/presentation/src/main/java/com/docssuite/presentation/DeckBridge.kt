@@ -23,7 +23,8 @@ internal fun buildDeck(name: String, slides: List<Slide>): Deck = Deck(
             titleSize = slide.titleSize,
             contentSize = slide.contentSize,
             align = slide.align,
-            fontName = fontLabelAt(slide.fontIndex)
+            fontName = fontLabelAt(slide.fontIndex),
+            notes = slide.notes
         )
     }
 )
@@ -40,7 +41,8 @@ internal fun decodeDeckModel(deck: Deck): List<Slide> = deck.slides.map { slide 
         fontIndex = fontIndexOf(slide.fontName),
         // Les fichiers PowerPoint portent des transitions bien plus variées que
         // celles de l'app : on repart du fondu plutôt que d'en inventer une.
-        transition = 1
+        transition = 1,
+        notes = slide.notes
     )
 }
 

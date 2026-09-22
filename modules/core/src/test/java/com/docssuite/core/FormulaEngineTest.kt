@@ -63,7 +63,9 @@ class FormulaEngineTest {
     @Test
     fun `erreurs et cycles`() {
         assertEquals("#ERREUR", eval("=SOMME("))
-        assertEquals("#ERREUR", eval("=1/0"))
+        // Le moteur distingue désormais les causes, comme un tableur.
+        assertEquals("#DIV/0!", eval("=1/0"))
+        assertEquals("#NOM?", eval("=BIDULE(1)"))
         assertEquals("#CYCLE", FormulaEngine.displayValue("Z1", mapOf("Z1" to "=Z1+1")))
     }
 

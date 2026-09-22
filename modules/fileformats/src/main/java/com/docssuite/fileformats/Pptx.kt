@@ -22,8 +22,9 @@ object Pptx {
 
     fun write(deck: Deck): ByteArray {
         val slides = deck.slides.ifEmpty { listOf(SlideModel(title = deck.title)) }
+        val notesIndexes = slides.indices.filter { slides[it].notes.isNotBlank() }.map { it + 1 }
         val zip = ZipBuilder()
-            .add("[Content_Types].xml", contentTypes(slides.size))
+            .add("[Content_Types].xml", contentTypes(slides.size, notesIndexes))
             .add("_rels/.rels", rootRels())
             .add("docProps/core.xml", coreProps(deck.title))
             .add("docProps/app.xml", appProps(slides.size))
@@ -35,15 +36,25 @@ object Pptx {
             .add("ppt/slideLayouts/_rels/slideLayout1.xml.rels", slideLayoutRels())
             .add("ppt/theme/theme1.xml", theme())
         slides.forEachIndexed { index, slide ->
+            val hasNotes = slide.notes.isNotBlank()
             zip.add("ppt/slides/slide${index + 1}.xml", slideXml(slide))
-            zip.add("ppt/slides/_rels/slide${index + 1}.xml.rels", slideRels())
+            zip.add("ppt/slides/_rels/slide${index + 1}.xml.rels", slideRels(hasNotes, index + 1))
+            if (hasNotes) {
+                zip.add("ppt/notesSlides/notesSlide${index + 1}.xml", notesSlideXml(slide.notes))
+                zip.add(
+                    "ppt/notesSlides/_rels/notesSlide${index + 1}.xml.rels",
+                    notesSlideRels(index + 1)
+                )
+            }
         }
         return zip.build()
     }
 
-    private fun contentTypes(slideCount: Int): String {
+    private fun contentTypes(slideCount: Int, notesIndexes: List<Int>): String {
         val slides = (1..slideCount).joinToString("") {
             "<Override PartName=\"/ppt/slides/slide$it.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
+        } + notesIndexes.joinToString("") {
+            "<Override PartName=\"/ppt/notesSlides/notesSlide$it.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml\"/>"
         }
         return XML_DECL + """
             <Types xmlns="$NS_CT">
@@ -94,11 +105,49 @@ object Pptx {
         """.trimIndent()
     }
 
-    private fun slideRels() = XML_DECL + """
+    private fun slideRels(hasNotes: Boolean, number: Int): String {
+        val notes = if (!hasNotes) "" else
+            "<Relationship Id=\"rId2\" Type=\"$NS_REL/notesSlide\" " +
+                "Target=\"../notesSlides/notesSlide$number.xml\"/>"
+        return XML_DECL + """
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+            <Relationship Id="rId1" Type="$NS_REL/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+            $notes
+            </Relationships>
+        """.trimIndent()
+    }
+
+    private fun notesSlideRels(number: Int) = XML_DECL + """
         <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-        <Relationship Id="rId1" Type="$NS_REL/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+        <Relationship Id="rId1" Type="$NS_REL/slide" Target="../slides/slide$number.xml"/>
         </Relationships>
     """.trimIndent()
+
+    /**
+     * Partie « notes » d'une diapositive. PowerPoint attend un corps de forme
+     * complet ; un simple bloc de texte ne serait pas relu.
+     */
+    private fun notesSlideXml(notes: String): String {
+        val paragraphs = notes.split("\n").joinToString("") { line ->
+            "<a:p><a:r><a:rPr lang=\"fr-FR\" dirty=\"0\"/><a:t>${xmlEscape(line)}</a:t></a:r></a:p>"
+        }
+        return XML_DECL + """
+            <p:notes xmlns:a="$NS_A" xmlns:p="$NS_P" xmlns:r="$NS_REL">
+            <p:cSld><p:spTree>
+            <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+            <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/>
+            <a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
+            <p:sp>
+            <p:nvSpPr><p:cNvPr id="2" name="Notes"/>
+            <p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>
+            <p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr>
+            <p:spPr/>
+            <p:txBody><a:bodyPr/><a:lstStyle/>$paragraphs</p:txBody>
+            </p:sp>
+            </p:spTree></p:cSld>
+            </p:notes>
+        """.trimIndent()
+    }
 
     private fun slideLayoutRels() = XML_DECL + """
         <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -262,9 +311,49 @@ object Pptx {
     fun read(bytes: ByteArray, title: String = "Présentation"): Deck {
         val parts = unzip(bytes)
         val order = slideOrder(parts)
-        val slides = order.mapNotNull { path -> parts[path]?.let { parseSlide(it) } }
+        val slides = order.mapNotNull { path ->
+            parts[path]?.let { parseSlide(it).copy(notes = notesFor(path, parts)) }
+        }
         if (slides.isEmpty()) throw FormatException("Ce .pptx ne contient aucune diapositive")
         return Deck(title, slides)
+    }
+
+    /**
+     * Notes attachées à une diapositive. PowerPoint range `slideN.xml` en face
+     * de `notesSlideN.xml` ; c'est aussi ce que cette classe écrit.
+     */
+    private fun notesFor(slidePath: String, parts: Map<String, ByteArray>): String {
+        val notesPath = slidePath
+            .replace("ppt/slides/slide", "ppt/notesSlides/notesSlide")
+        val xml = parts[notesPath] ?: return ""
+        return runCatching {
+            val paragraphs = ArrayList<String>()
+            val line = StringBuilder()
+            var inText = false
+            val parser = newPullParser(xml)
+            var event = parser.eventType
+            while (event != XmlPullParser.END_DOCUMENT) {
+                when (event) {
+                    XmlPullParser.START_TAG -> if (parser.localName == "t") inText = true
+                    XmlPullParser.TEXT -> if (inText) line.append(parser.text)
+                    XmlPullParser.END_TAG -> when (parser.localName) {
+                        "t" -> inText = false
+                        "p" -> {
+                            paragraphs.add(line.toString())
+                            line.setLength(0)
+                        }
+                    }
+                }
+                event = parser.next()
+            }
+            // Les notes portent aussi le numéro de diapositive dans un champ
+            // séparé : une ligne purement numérique n'est pas du commentaire.
+            paragraphs
+                .dropLastWhile { it.isBlank() }
+                .filterNot { it.isNotEmpty() && it.all { ch -> ch.isDigit() } }
+                .joinToString("\n")
+                .trim()
+        }.getOrDefault("")
     }
 
     /**

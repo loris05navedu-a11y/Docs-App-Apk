@@ -167,6 +167,42 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
         formats[selected] = transform(formats[selected] ?: CellFormat())
     }
 
+    fun selectedRow(): Int = (selected.dropWhile { it.isLetter() }.toIntOrNull() ?: 1) - 1
+
+    fun selectedColumn(): Int = FormulaEngine.columnIndex(selected.takeWhile { it.isLetter() })
+
+    fun replaceGrid(data: SheetData<CellFormat>) {
+        cells.clear(); cells.putAll(data.cells)
+        formats.clear(); formats.putAll(data.formats)
+        editing = cells[selected].orEmpty()
+    }
+
+    fun applyGridEdit(
+        operation: (Map<String, String>, Map<String, CellFormat>, Int) -> SheetData<CellFormat>,
+        index: Int
+    ) = replaceGrid(operation(cells.toMap(), formats.toMap(), index))
+
+    /**
+     * Trie de la cellule choisie jusqu'à la dernière ligne remplie. Partir de
+     * la sélection laisse l'en-tête en place quand on se place sous lui.
+     */
+    fun sortColumn(ascending: Boolean) {
+        val column = selectedColumn()
+        val lastFilled = (0 until rows).lastOrNull { row ->
+            (0 until columns).any { cells[FormulaEngine.cellKey(row, it)].isNullOrBlank().not() }
+        } ?: return
+        replaceGrid(
+            SheetOps.sortByColumn(
+                cells.toMap(), formats.toMap(),
+                column = column,
+                firstRow = selectedRow(),
+                lastRow = lastFilled,
+                columns = columns,
+                ascending = ascending
+            )
+        )
+    }
+
     fun commitEdit(moveDown: Boolean = false) {
         if (editing.isBlank()) cells.remove(selected) else cells[selected] = editing.trim()
         if (moveDown) {
@@ -350,6 +386,32 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                             DropdownMenuItem(
                                 text = { Text("Partager en texte CSV") },
                                 onClick = { showMenu = false; shareText(context, "$docName.csv", toCsv()) }
+                            )
+                            Divider()
+                            DropdownMenuItem(
+                                text = { Text("Insérer une ligne ici") },
+                                onClick = { showMenu = false; applyGridEdit(SheetOps::insertRow, selectedRow()); rows += 1 }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Supprimer cette ligne") },
+                                onClick = { showMenu = false; applyGridEdit(SheetOps::deleteRow, selectedRow()) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Insérer une colonne ici") },
+                                onClick = { showMenu = false; applyGridEdit(SheetOps::insertColumn, selectedColumn()); columns += 1 }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Supprimer cette colonne") },
+                                onClick = { showMenu = false; applyGridEdit(SheetOps::deleteColumn, selectedColumn()) }
+                            )
+                            Divider()
+                            DropdownMenuItem(
+                                text = { Text("Trier à partir d'ici (croissant)") },
+                                onClick = { showMenu = false; sortColumn(ascending = true) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Trier à partir d'ici (décroissant)") },
+                                onClick = { showMenu = false; sortColumn(ascending = false) }
                             )
                             Divider()
                             DropdownMenuItem(
@@ -611,12 +673,9 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
     }
 
     if (showFunctions) {
-        ListPickerDialog(
-            title = "Insérer une fonction",
-            items = FormulaEngine.FUNCTIONS,
-            label = { it },
-            onPick = { fn ->
-                editing = if (fn == "SI") "=SI(A1>10;1;0)" else "=$fn(A1:A10)"
+        FunctionCatalogDialog(
+            onPick = { entry ->
+                editing = sampleFormula(entry)
                 showFunctions = false
             },
             onDismiss = { showFunctions = false }
