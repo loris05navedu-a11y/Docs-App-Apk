@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tableur</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<header class="titlebar">
+  <div class="brand">
+    <span class="mark">T</span>
+    <div>
+      <h1 id="docName">Classeur sans titre</h1>
+      <p id="docPath">Nouveau classeur</p>
+    </div>
+  </div>
+  <div class="titlebar-actions">
+    <button id="btnNew" class="ghost">Nouveau</button>
+    <button id="btnOpen" class="ghost">Ouvrir</button>
+    <button id="btnSave" class="primary">Enregistrer</button>
+    <div class="menu-wrap">
+      <button id="btnMore" class="ghost" aria-haspopup="true">Plus ▾</button>
+      <div id="moreMenu" class="menu" hidden>
+        <button data-action="saveAs">Enregistrer sous…</button>
+        <button data-action="exportXlsx">Exporter en Excel (.xlsx)</button>
+        <button data-action="exportCsv">Exporter en CSV</button>
+        <hr>
+        <button data-action="clear">Tout effacer</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<nav class="toolbar">
+  <div class="group">
+    <button id="btnBold" class="tool" title="Gras"><b>G</b></button>
+    <button id="btnItalic" class="tool" title="Italique"><i>I</i></button>
+    <button id="btnTextColor" class="tool" title="Couleur du texte">A<span class="swatch" id="swText"></span></button>
+    <button id="btnFillColor" class="tool" title="Couleur de fond">▩<span class="swatch" id="swFill"></span></button>
+    <button id="btnClearFormat" class="tool" title="Effacer la mise en forme">⌫</button>
+  </div>
+  <div class="sep"></div>
+  <div class="group">
+    <button id="btnAlignLeft" class="tool" title="Aligner à gauche">⯇</button>
+    <button id="btnAlignCenter" class="tool" title="Centrer">≡</button>
+    <button id="btnAlignRight" class="tool" title="Aligner à droite">⯈</button>
+  </div>
+  <div class="sep"></div>
+  <div class="group">
+    <button id="btnFunctions" class="tool wide" title="Assistant de formules">ƒx Fonctions</button>
+  </div>
+  <div class="sep"></div>
+  <div class="group">
+    <button class="tool" data-op="insertRow" title="Insérer une ligne">+ Ligne</button>
+    <button class="tool" data-op="deleteRow" title="Supprimer la ligne">− Ligne</button>
+    <button class="tool" data-op="insertColumn" title="Insérer une colonne">+ Col.</button>
+    <button class="tool" data-op="deleteColumn" title="Supprimer la colonne">− Col.</button>
+  </div>
+  <div class="sep"></div>
+  <div class="group">
+    <button id="btnSortAsc" class="tool" title="Trier de A à Z à partir de la cellule choisie">A→Z</button>
+    <button id="btnSortDesc" class="tool" title="Trier de Z à A à partir de la cellule choisie">Z→A</button>
+  </div>
+</nav>
+
+<div class="formulabar">
+  <div class="cellref" id="cellRef">A1</div>
+  <div class="fx">ƒx</div>
+  <input id="formulaInput" type="text" spellcheck="false" autocomplete="off"
+         placeholder="Saisissez une valeur ou une formule commençant par =">
+</div>
+
+<main class="gridwrap" id="gridWrap">
+  <table class="grid" id="grid"></table>
+</main>
+
+<footer class="statusbar">
+  <span id="statusStats">Prêt</span>
+  <span class="spacer"></span>
+  <span id="statusMessage"></span>
+</footer>
+
+<div id="overlay" class="overlay" hidden>
+  <div class="panel" id="panel"></div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
