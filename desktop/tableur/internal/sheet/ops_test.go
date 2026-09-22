@@ -2,8 +2,8 @@ package sheet
 
 import "testing"
 
-func sample() *Book {
-	b := New()
+func sample() *Sheet {
+	b := NewSheet("Feuille1")
 	b.Columns = 4
 	b.Cells = map[string]string{
 		"A1": "10", "B1": "Alpha",
@@ -43,7 +43,7 @@ func TestDeleteRow(t *testing.T) {
 		t.Errorf("formule non suivie : %q", b.Cells["C1"])
 	}
 
-	pointing := New()
+	pointing := NewSheet("Feuille1")
 	pointing.Cells = map[string]string{"A2": "5", "B1": "=A2*2"}
 	pointing.DeleteRow(1)
 	if pointing.Cells["B1"] != "=#REF!*2" {
@@ -106,7 +106,7 @@ func TestSort(t *testing.T) {
 }
 
 func TestSortVidesEnDernier(t *testing.T) {
-	b := New()
+	b := NewSheet("Feuille1")
 	b.Columns = 1
 	b.Cells = map[string]string{"A1": "b", "A3": "a"}
 	b.Sort(0, 0, 2, true)
@@ -119,7 +119,7 @@ func TestSortVidesEnDernier(t *testing.T) {
 }
 
 func TestSetEffaceUneSaisieVide(t *testing.T) {
-	b := New()
+	b := NewSheet("Feuille1")
 	b.Set("A1", "x")
 	b.Set("A1", "")
 	if _, present := b.Cells["A1"]; present {

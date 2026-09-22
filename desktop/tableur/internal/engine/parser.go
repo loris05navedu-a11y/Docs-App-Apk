@@ -373,6 +373,14 @@ func (p *parser) parsePrimary() Value {
 	if c == '"' {
 		return p.parseString()
 	}
+	if c == '\'' {
+		// 'Ventes 2024'!A1 — nom de feuille entre apostrophes.
+		prefix, ok := p.readSheetPrefix()
+		if !ok {
+			panic(parseError{"nom de feuille invalide"})
+		}
+		return p.parseNameOrRefWithSheet(prefix)
+	}
 	if isDigit(c) || c == '.' {
 		return p.parseNumber()
 	}
@@ -418,7 +426,63 @@ func (p *parser) parseNumber() Value {
 	return Number(n)
 }
 
+// readSheetPrefix lit « Nom! » ou « 'Nom avec espaces'! » s'il y en a un.
+// La position reste inchangée quand rien ne correspond.
+func (p *parser) readSheetPrefix() (string, bool) {
+	save := p.pos
+	if p.pos < len(p.src) && p.src[p.pos] == '\'' {
+		end := strings.IndexByte(p.src[p.pos+1:], '\'')
+		if end < 0 {
+			p.pos = save
+			return "", false
+		}
+		name := p.src[p.pos+1 : p.pos+1+end]
+		after := p.pos + end + 2
+		if after < len(p.src) && p.src[after] == '!' {
+			p.pos = after + 1
+			return name, true
+		}
+		p.pos = save
+		return "", false
+	}
+	j := p.pos
+	for j < len(p.src) && (isLetter(p.src[j]) || isDigit(p.src[j]) || p.src[j] == '_') {
+		j++
+	}
+	if j > p.pos && j < len(p.src) && p.src[j] == '!' {
+		name := p.src[p.pos:j]
+		p.pos = j + 1
+		return name, true
+	}
+	p.pos = save
+	return "", false
+}
+
+// Qualify compose la clé d'une cellule d'une autre feuille.
+func Qualify(sheetName, ref string) string {
+	if sheetName == "" {
+		return ref
+	}
+	return sheetName + "!" + ref
+}
+
+func (p *parser) parseNameOrRefWithSheet(sheetName string) Value {
+	start := p.pos
+	for p.pos < len(p.src) && (isLetter(p.src[p.pos]) || isDigit(p.src[p.pos])) {
+		p.pos++
+	}
+	ref := strings.ToUpper(p.src[start:p.pos])
+	if !IsCellRef(ref) {
+		panic(parseError{"référence invalide après le nom de feuille"})
+	}
+	return ValueAt(Qualify(sheetName, ref), p.cells, p.visiting)
+}
+
 func (p *parser) parseNameOrRef() Value {
+	// Un nom suivi de « ! » désigne une feuille, pas une fonction.
+	if prefix, ok := p.readSheetPrefix(); ok {
+		return p.parseNameOrRefWithSheet(prefix)
+	}
 	start := p.pos
 	// Le point fait partie des noms français : NB.SI, ARRONDI.SUP…
 	for p.pos < len(p.src) {
@@ -471,6 +535,8 @@ func (p *parser) parseNameOrRef() Value {
 func (p *parser) parseArgument() Arg {
 	save := p.pos
 	p.skipWs()
+	// Une plage peut désigner une autre feuille : Feuille2!A1:B3.
+	sheetName, _ := p.readSheetPrefix()
 	start := p.pos
 	if p.pos < len(p.src) && isLetter(p.src[p.pos]) {
 		for p.pos < len(p.src) && isLetter(p.src[p.pos]) {
@@ -495,7 +561,10 @@ func (p *parser) parseArgument() Arg {
 					p.pos++
 				}
 				if colEnd2 < p.pos {
-					return Arg{Grid: p.grid(p.src[start:refEnd], p.src[start2:p.pos]), IsRange: true}
+					return Arg{
+						Grid:    p.grid(sheetName, p.src[start:refEnd], p.src[start2:p.pos]),
+						IsRange: true,
+					}
 				}
 			}
 		}
@@ -504,7 +573,7 @@ func (p *parser) parseArgument() Arg {
 	return one(p.parseComparison())
 }
 
-func (p *parser) grid(from, to string) [][]Value {
+func (p *parser) grid(sheetName, from, to string) [][]Value {
 	r1, c1, ok1 := SplitRef(strings.ToUpper(from))
 	r2, c2, ok2 := SplitRef(strings.ToUpper(to))
 	if !ok1 || !ok2 {
@@ -520,7 +589,7 @@ func (p *parser) grid(from, to string) [][]Value {
 	for r := r1; r <= r2; r++ {
 		row := make([]Value, 0, c2-c1+1)
 		for c := c1; c <= c2; c++ {
-			row = append(row, ValueAt(CellKey(r, c), p.cells, p.visiting))
+			row = append(row, ValueAt(Qualify(sheetName, CellKey(r, c)), p.cells, p.visiting))
 		}
 		rows = append(rows, row)
 	}

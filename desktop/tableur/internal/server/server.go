@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/docssuite/tableur/internal/chart"
 	"github.com/docssuite/tableur/internal/dialog"
 	"github.com/docssuite/tableur/internal/engine"
 	"github.com/docssuite/tableur/internal/fileio"
@@ -22,7 +23,7 @@ import (
 
 type Server struct {
 	mu       sync.Mutex
-	book     *sheet.Book
+	book     *sheet.Workbook
 	path     string
 	modified bool
 	assets   fs.FS
@@ -51,21 +52,38 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/functions", s.handleFunctions)
 	mux.HandleFunc("/api/file", s.handleFile)
 	mux.HandleFunc("/api/evaluate", s.handleEvaluate)
+	mux.HandleFunc("/api/sheet", s.handleSheet)
+	mux.HandleFunc("/api/chart", s.handleChart)
+	mux.HandleFunc("/api/chartkinds", s.handleChartKinds)
 	return mux
 }
 
 // ------------------------------------------------------------------ état
 
+type sheetTab struct {
+	Name string `json:"name"`
+}
+
 type stateResponse struct {
 	Name      string                  `json:"name"`
 	Path      string                  `json:"path"`
 	Modified  bool                    `json:"modified"`
+	Sheets    []sheetTab              `json:"sheets"`
+	Active    int                     `json:"active"`
 	Rows      int                     `json:"rows"`
 	Columns   int                     `json:"columns"`
 	Cells     map[string]string       `json:"cells"`
 	Display   map[string]string       `json:"display"`
 	Formats   map[string]sheet.Format `json:"formats"`
+	Charts    []chartView             `json:"charts"`
 	DialogsOK bool                    `json:"dialogsOk"`
+}
+
+// chartView joint la définition d'un graphique aux données déjà résolues :
+// l'interface n'a plus qu'à tracer.
+type chartView struct {
+	sheet.Chart
+	Data chart.Data `json:"data"`
 }
 
 // state compose la réponse. Les valeurs affichées sont recalculées à chaque
@@ -73,23 +91,38 @@ type stateResponse struct {
 // d'une cellule que l'on vient de modifier ailleurs.
 func (s *Server) state() stateResponse {
 	cells := s.book.EngineCells()
-	display := make(map[string]string, len(s.book.Cells))
-	for ref := range s.book.Cells {
+	current := s.book.Current()
+	display := make(map[string]string, len(current.Cells))
+	for ref := range current.Cells {
 		display[ref] = engine.Display(ref, cells)
 	}
 	name := s.book.Name
 	if s.path != "" {
 		name = strings.TrimSuffix(filepath.Base(s.path), filepath.Ext(s.path))
 	}
+	tabs := make([]sheetTab, 0, len(s.book.Sheets))
+	for _, sh := range s.book.Sheets {
+		tabs = append(tabs, sheetTab{Name: sh.Name})
+	}
+	views := make([]chartView, 0, len(current.Charts))
+	for _, c := range current.Charts {
+		views = append(views, chartView{
+			Chart: c,
+			Data:  chart.Resolve(c.Kind, c.Title, c.Labels, c.Series, c.Bins, cells),
+		})
+	}
 	return stateResponse{
 		Name:      name,
 		Path:      s.path,
 		Modified:  s.modified,
-		Rows:      s.book.Rows,
-		Columns:   s.book.Columns,
-		Cells:     s.book.Cells,
+		Sheets:    tabs,
+		Active:    s.book.Active,
+		Rows:      current.Rows,
+		Columns:   current.Columns,
+		Cells:     current.Cells,
 		Display:   display,
-		Formats:   s.book.Formats,
+		Formats:   current.Formats,
+		Charts:    views,
 		DialogsOK: dialog.Available,
 	}
 }
@@ -160,7 +193,7 @@ func (s *Server) handleCell(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.book.Set(ref, strings.TrimSpace(body.Raw))
+	s.book.Current().Set(ref, strings.TrimSpace(body.Raw))
 	s.modified = true
 	s.writeState(w)
 }
@@ -181,16 +214,17 @@ func (s *Server) handleFormat(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	current := s.book.Current()
 	for _, raw := range body.Refs {
 		ref := strings.ToUpper(strings.TrimSpace(raw))
 		if !engine.IsCellRef(ref) {
 			continue
 		}
 		if body.Clear {
-			s.book.SetFormat(ref, sheet.Format{})
+			current.SetFormat(ref, sheet.Format{})
 			continue
 		}
-		f := s.book.Formats[ref]
+		f := current.Formats[ref]
 		if body.Bold != nil {
 			f.Bold = *body.Bold
 		}
@@ -206,7 +240,7 @@ func (s *Server) handleFormat(w http.ResponseWriter, r *http.Request) {
 		if body.Align != nil {
 			f.Align = *body.Align
 		}
-		s.book.SetFormat(ref, f)
+		current.SetFormat(ref, f)
 	}
 	s.modified = true
 	s.writeState(w)
@@ -226,25 +260,26 @@ func (s *Server) handleOp(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	current := s.book.Current()
 	switch body.Op {
 	case "insertRow":
-		s.book.InsertRow(body.Index)
+		current.InsertRow(body.Index)
 	case "deleteRow":
-		s.book.DeleteRow(body.Index)
+		current.DeleteRow(body.Index)
 	case "insertColumn":
-		s.book.InsertColumn(body.Index)
+		current.InsertColumn(body.Index)
 	case "deleteColumn":
-		s.book.DeleteColumn(body.Index)
+		current.DeleteColumn(body.Index)
 	case "addRows":
-		s.book.Rows += 20
+		current.Rows += 20
 	case "addColumns":
-		s.book.Columns += 4
+		current.Columns += 4
 	case "sort":
-		lastRow, _ := s.book.Extent()
+		lastRow, _ := current.Extent()
 		if lastRow < body.FirstRow {
 			lastRow = body.FirstRow
 		}
-		s.book.Sort(body.Column, body.FirstRow, lastRow, body.Ascending)
+		current.Sort(body.Column, body.FirstRow, lastRow, body.Ascending)
 	case "clear":
 		name := s.book.Name
 		s.book = sheet.New()
@@ -361,7 +396,7 @@ func (s *Server) load(path string) error {
 	if err != nil {
 		return fmt.Errorf("ce fichier n'a pas pu être lu")
 	}
-	var book *sheet.Book
+	var book *sheet.Workbook
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".xlsx":
 		book, err = fileio.ImportXLSX(data)
@@ -414,7 +449,7 @@ func detectSeparator(data []byte) rune {
 }
 
 // Book expose le classeur aux tests.
-func (s *Server) Book() *sheet.Book {
+func (s *Server) Book() *sheet.Workbook {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.book

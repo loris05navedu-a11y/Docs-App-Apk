@@ -8,16 +8,17 @@ import (
 	"github.com/docssuite/tableur/internal/sheet"
 )
 
-func book() *sheet.Book {
+func book() *sheet.Workbook {
 	b := sheet.New()
 	b.Name = "Budget"
-	b.Cells = map[string]string{
+	s := b.Current()
+	s.Cells = map[string]string{
 		"A1": "Produit", "B1": "Prix",
 		"A2": "Pomme", "B2": "2.5",
 		"A3": "Poire", "B3": "3",
 		"B4": "=SOMME(B2:B3)",
 	}
-	b.Formats = map[string]sheet.Format{
+	s.Formats = map[string]sheet.Format{
 		"A1": {Bold: true, Background: "#DDEEFF"},
 		"B1": {Bold: true, Align: "right"},
 	}
@@ -33,10 +34,10 @@ func TestJSONAllerRetour(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restored.Name != "Budget" || restored.Cells["B4"] != "=SOMME(B2:B3)" {
+	if restored.Name != "Budget" || restored.Current().Cells["B4"] != "=SOMME(B2:B3)" {
 		t.Errorf("classeur mal restauré : %+v", restored)
 	}
-	if !restored.Formats["A1"].Bold {
+	if !restored.Current().Formats["A1"].Bold {
 		t.Error("la mise en forme doit survivre")
 	}
 }
@@ -58,8 +59,8 @@ func TestCSVAllerRetour(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restored.Cells["A2"] != "Pomme" || restored.Cells["B3"] != "3" {
-		t.Errorf("CSV mal relu : %v", restored.Cells)
+	if restored.Current().Cells["A2"] != "Pomme" || restored.Current().Cells["B3"] != "3" {
+		t.Errorf("CSV mal relu : %v", restored.Current().Cells)
 	}
 }
 
@@ -75,15 +76,15 @@ func TestXLSXAllerRetour(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restored.Cells["A2"] != "Pomme" {
-		t.Errorf("texte perdu : %q", restored.Cells["A2"])
+	if restored.Current().Cells["A2"] != "Pomme" {
+		t.Errorf("texte perdu : %q", restored.Current().Cells["A2"])
 	}
-	if restored.Cells["B2"] != "2.5" {
-		t.Errorf("nombre perdu : %q", restored.Cells["B2"])
+	if restored.Current().Cells["B2"] != "2.5" {
+		t.Errorf("nombre perdu : %q", restored.Current().Cells["B2"])
 	}
 	// La formule repart en français après le détour par l'anglais d'Excel.
-	if restored.Cells["B4"] != "=SOMME(B2:B3)" {
-		t.Errorf("formule perdue : %q", restored.Cells["B4"])
+	if restored.Current().Cells["B4"] != "=SOMME(B2:B3)" {
+		t.Errorf("formule perdue : %q", restored.Current().Cells["B4"])
 	}
 }
 

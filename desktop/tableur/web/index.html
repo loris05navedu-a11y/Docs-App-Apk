@@ -4,90 +4,186 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tableur</title>
+<link rel="icon" href="logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
 
-<header class="titlebar">
-  <div class="brand">
-    <span class="mark">T</span>
-    <div>
-      <h1 id="docName">Classeur sans titre</h1>
-      <p id="docPath">Nouveau classeur</p>
-    </div>
+<!-- Jeu d'icônes : un seul tracé par symbole, épaisseur constante. -->
+<svg class="sprite" aria-hidden="true">
+  <defs>
+    <g id="i-bold"><path d="M5 3h5.5a3.5 3.5 0 0 1 0 7H5zM5 10h6.5a3.5 3.5 0 0 1 0 7H5z"/></g>
+    <g id="i-italic"><path d="M12 3h-4M12 17H8M13 3l-3 14"/></g>
+    <g id="i-left"><path d="M3 5h14M3 10h9M3 15h12"/></g>
+    <g id="i-center"><path d="M3 5h14M5 10h10M4 15h12"/></g>
+    <g id="i-right"><path d="M3 5h14M8 10h9M5 15h12"/></g>
+    <g id="i-paint"><path d="M4 9h12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM7 9V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v4"/></g>
+    <g id="i-erase"><path d="M8 4h9M4 10l5-6 7 5-6 7zM3 17h8"/></g>
+    <g id="i-fx"><path d="M11 4H8.5A2.5 2.5 0 0 0 6 6.5V16M4 10h5M12 9l5 7M17 9l-5 7"/></g>
+    <g id="i-chart"><path d="M3 17V8M8 17V4M13 17v-6M18 17v-9"/></g>
+    <g id="i-rowplus"><path d="M3 6h14M3 12h14M10 15v-6M7 12h6" /></g>
+    <g id="i-rowminus"><path d="M3 6h14M3 14h14M7 10h6"/></g>
+    <g id="i-colplus"><path d="M6 3v14M12 3v14M9 12V6M6 9h6"/></g>
+    <g id="i-colminus"><path d="M6 3v14M14 3v14M10 7v6"/></g>
+    <g id="i-sortasc"><path d="M5 15V4M2 7l3-3 3 3M10 5h8M10 10h6M10 15h4"/></g>
+    <g id="i-sortdesc"><path d="M5 4v11M2 12l3 3 3-3M10 5h4M10 10h6M10 15h8"/></g>
+    <g id="i-plus"><path d="M10 4v12M4 10h12"/></g>
+    <g id="i-close"><path d="M5 5l10 10M15 5L5 15"/></g>
+    <g id="i-search"><circle cx="9" cy="9" r="5"/><path d="M13 13l4 4"/></g>
+    <g id="i-check"><path d="M4 10l4 4 8-9"/></g>
+  </defs>
+</svg>
+
+<header class="chrome">
+  <div class="identity">
+    <img src="logo.svg" alt="" width="22" height="22">
+    <span class="wordmark">Tableur</span>
   </div>
-  <div class="titlebar-actions">
-    <button id="btnNew" class="ghost">Nouveau</button>
-    <button id="btnOpen" class="ghost">Ouvrir</button>
-    <button id="btnSave" class="primary">Enregistrer</button>
-    <div class="menu-wrap">
-      <button id="btnMore" class="ghost" aria-haspopup="true">Plus ▾</button>
-      <div id="moreMenu" class="menu" hidden>
-        <button data-action="saveAs">Enregistrer sous…</button>
-        <button data-action="exportXlsx">Exporter en Excel (.xlsx)</button>
-        <button data-action="exportCsv">Exporter en CSV</button>
-        <hr>
-        <button data-action="clear">Tout effacer</button>
-      </div>
+
+  <nav class="menubar" id="menubar">
+    <button class="menutrigger" data-menu="fichier">Fichier</button>
+    <button class="menutrigger" data-menu="edition">Édition</button>
+    <button class="menutrigger" data-menu="insertion">Insertion</button>
+    <button class="menutrigger" data-menu="format">Format</button>
+    <button class="menutrigger" data-menu="donnees">Données</button>
+
+    <div class="dropdown" data-for="fichier" hidden>
+      <button data-cmd="file:new">Nouveau<kbd>Ctrl N</kbd></button>
+      <button data-cmd="file:open">Ouvrir…<kbd>Ctrl O</kbd></button>
+      <hr>
+      <button data-cmd="file:save">Enregistrer<kbd>Ctrl S</kbd></button>
+      <button data-cmd="file:saveAs">Enregistrer sous…</button>
+      <hr>
+      <button data-cmd="file:exportXlsx">Exporter en Excel (.xlsx)</button>
+      <button data-cmd="file:exportCsv">Exporter en CSV</button>
     </div>
+
+    <div class="dropdown" data-for="edition" hidden>
+      <button data-cmd="edit:clearCells">Effacer le contenu<kbd>Suppr</kbd></button>
+      <button data-cmd="format:clear">Effacer la mise en forme</button>
+      <hr>
+      <button data-cmd="edit:clearAll">Vider le classeur</button>
+    </div>
+
+    <div class="dropdown" data-for="insertion" hidden>
+      <button data-cmd="insert:function">Fonction…</button>
+      <button data-cmd="insert:chart">Graphique…</button>
+      <hr>
+      <button data-cmd="op:insertRow">Ligne au-dessus</button>
+      <button data-cmd="op:insertColumn">Colonne à gauche</button>
+      <hr>
+      <button data-cmd="op:addRows">20 lignes de plus</button>
+      <button data-cmd="op:addColumns">4 colonnes de plus</button>
+    </div>
+
+    <div class="dropdown" data-for="format" hidden>
+      <button data-cmd="format:bold">Gras<kbd>Ctrl B</kbd></button>
+      <button data-cmd="format:italic">Italique<kbd>Ctrl I</kbd></button>
+      <hr>
+      <button data-cmd="format:textColor">Couleur du texte…</button>
+      <button data-cmd="format:fillColor">Couleur de fond…</button>
+      <hr>
+      <button data-cmd="align:left">Aligner à gauche</button>
+      <button data-cmd="align:center">Centrer</button>
+      <button data-cmd="align:right">Aligner à droite</button>
+    </div>
+
+    <div class="dropdown" data-for="donnees" hidden>
+      <button data-cmd="sort:asc">Trier de A à Z</button>
+      <button data-cmd="sort:desc">Trier de Z à A</button>
+      <hr>
+      <button data-cmd="op:deleteRow">Supprimer la ligne</button>
+      <button data-cmd="op:deleteColumn">Supprimer la colonne</button>
+    </div>
+  </nav>
+
+  <div class="filename">
+    <span id="docName">Classeur sans titre</span>
+    <span id="dirtyDot" class="dot" hidden title="Modifications non enregistrées"></span>
   </div>
 </header>
 
-<nav class="toolbar">
-  <div class="group">
-    <button id="btnBold" class="tool" title="Gras"><b>G</b></button>
-    <button id="btnItalic" class="tool" title="Italique"><i>I</i></button>
-    <button id="btnTextColor" class="tool" title="Couleur du texte">A<span class="swatch" id="swText"></span></button>
-    <button id="btnFillColor" class="tool" title="Couleur de fond">▩<span class="swatch" id="swFill"></span></button>
-    <button id="btnClearFormat" class="tool" title="Effacer la mise en forme">⌫</button>
+<div class="ribbon">
+  <div class="cluster">
+    <button class="icon" data-cmd="format:bold" id="tBold" title="Gras (Ctrl+B)"><svg><use href="#i-bold"/></svg></button>
+    <button class="icon" data-cmd="format:italic" id="tItalic" title="Italique (Ctrl+I)"><svg><use href="#i-italic"/></svg></button>
+    <button class="icon" data-cmd="format:textColor" title="Couleur du texte"><svg><use href="#i-fx"/></svg><i class="chip" id="chipText"></i></button>
+    <button class="icon" data-cmd="format:fillColor" title="Couleur de fond"><svg><use href="#i-paint"/></svg><i class="chip" id="chipFill"></i></button>
+    <button class="icon" data-cmd="format:clear" title="Effacer la mise en forme"><svg><use href="#i-erase"/></svg></button>
   </div>
-  <div class="sep"></div>
-  <div class="group">
-    <button id="btnAlignLeft" class="tool" title="Aligner à gauche">⯇</button>
-    <button id="btnAlignCenter" class="tool" title="Centrer">≡</button>
-    <button id="btnAlignRight" class="tool" title="Aligner à droite">⯈</button>
+  <span class="divider"></span>
+  <div class="cluster">
+    <button class="icon" data-cmd="align:left" id="tLeft" title="Aligner à gauche"><svg><use href="#i-left"/></svg></button>
+    <button class="icon" data-cmd="align:center" id="tCenter" title="Centrer"><svg><use href="#i-center"/></svg></button>
+    <button class="icon" data-cmd="align:right" id="tRight" title="Aligner à droite"><svg><use href="#i-right"/></svg></button>
   </div>
-  <div class="sep"></div>
-  <div class="group">
-    <button id="btnFunctions" class="tool wide" title="Assistant de formules">ƒx Fonctions</button>
+  <span class="divider"></span>
+  <div class="cluster">
+    <button class="icon" data-cmd="op:insertRow" title="Insérer une ligne"><svg><use href="#i-rowplus"/></svg></button>
+    <button class="icon" data-cmd="op:deleteRow" title="Supprimer la ligne"><svg><use href="#i-rowminus"/></svg></button>
+    <button class="icon" data-cmd="op:insertColumn" title="Insérer une colonne"><svg><use href="#i-colplus"/></svg></button>
+    <button class="icon" data-cmd="op:deleteColumn" title="Supprimer la colonne"><svg><use href="#i-colminus"/></svg></button>
   </div>
-  <div class="sep"></div>
-  <div class="group">
-    <button class="tool" data-op="insertRow" title="Insérer une ligne">+ Ligne</button>
-    <button class="tool" data-op="deleteRow" title="Supprimer la ligne">− Ligne</button>
-    <button class="tool" data-op="insertColumn" title="Insérer une colonne">+ Col.</button>
-    <button class="tool" data-op="deleteColumn" title="Supprimer la colonne">− Col.</button>
+  <span class="divider"></span>
+  <div class="cluster">
+    <button class="icon" data-cmd="sort:asc" title="Trier de A à Z"><svg><use href="#i-sortasc"/></svg></button>
+    <button class="icon" data-cmd="sort:desc" title="Trier de Z à A"><svg><use href="#i-sortdesc"/></svg></button>
   </div>
-  <div class="sep"></div>
-  <div class="group">
-    <button id="btnSortAsc" class="tool" title="Trier de A à Z à partir de la cellule choisie">A→Z</button>
-    <button id="btnSortDesc" class="tool" title="Trier de Z à A à partir de la cellule choisie">Z→A</button>
+  <span class="divider"></span>
+  <div class="cluster">
+    <button class="labelled" data-cmd="insert:function"><svg><use href="#i-fx"/></svg>Fonction</button>
+    <button class="labelled" data-cmd="insert:chart"><svg><use href="#i-chart"/></svg>Graphique</button>
   </div>
-</nav>
-
-<div class="formulabar">
-  <div class="cellref" id="cellRef">A1</div>
-  <div class="fx">ƒx</div>
-  <input id="formulaInput" type="text" spellcheck="false" autocomplete="off"
-         placeholder="Saisissez une valeur ou une formule commençant par =">
+  <span class="grow"></span>
+  <button class="labelled ghost" id="toggleCharts" data-cmd="panel:charts">
+    <svg><use href="#i-chart"/></svg><span id="chartCount">Graphiques</span>
+  </button>
 </div>
 
-<main class="gridwrap" id="gridWrap">
-  <table class="grid" id="grid"></table>
+<div class="fxbar">
+  <div class="namebox" id="cellRef">A1</div>
+  <div class="fxmark"><svg><use href="#i-fx"/></svg></div>
+  <input id="formulaInput" type="text" spellcheck="false" autocomplete="off"
+         placeholder="Valeur, ou formule commençant par =">
+</div>
+
+<main class="workspace">
+  <section class="gridpane" id="gridPane">
+    <table class="grid" id="grid"></table>
+  </section>
+  <aside class="chartpane" id="chartPane" hidden>
+    <div class="panehead">
+      <h2>Graphiques</h2>
+      <button class="icon small" data-cmd="panel:charts" title="Masquer"><svg><use href="#i-close"/></svg></button>
+    </div>
+    <div class="panebody" id="chartList"></div>
+    <div class="panefoot">
+      <button class="labelled" data-cmd="insert:chart"><svg><use href="#i-plus"/></svg>Nouveau graphique</button>
+    </div>
+  </aside>
 </main>
 
-<footer class="statusbar">
-  <span id="statusStats">Prêt</span>
-  <span class="spacer"></span>
-  <span id="statusMessage"></span>
+<footer class="sheetbar">
+  <div class="tabs" id="sheetTabs"></div>
+  <button class="icon small" id="addSheet" title="Nouvelle feuille"><svg><use href="#i-plus"/></svg></button>
+  <span class="grow"></span>
+  <div class="readout" id="readout">Prêt</div>
 </footer>
 
-<div id="overlay" class="overlay" hidden>
-  <div class="panel" id="panel"></div>
+<div id="sheetMenu" class="contextmenu" hidden>
+  <button data-sheet="rename">Renommer…</button>
+  <button data-sheet="duplicate">Dupliquer</button>
+  <hr>
+  <button data-sheet="left">Déplacer à gauche</button>
+  <button data-sheet="right">Déplacer à droite</button>
+  <hr>
+  <button data-sheet="remove" class="danger">Supprimer</button>
 </div>
 
+<div id="scrim" class="scrim" hidden><div class="dialog" id="dialog"></div></div>
 <div id="toast" class="toast" hidden></div>
 
+<script src="charts.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

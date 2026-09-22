@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Tableur">
+  <rect width="64" height="64" rx="15" fill="#0B6E4F"/>
+  <!-- Bandeau d'en-tête -->
+  <rect x="13" y="16" width="38" height="8" rx="2" fill="#FFFFFF" opacity=".92"/>
+  <!-- Corps du tableau : trois colonnes, deux lignes -->
+  <rect x="13" y="27" width="11" height="8" rx="1.6" fill="#FFFFFF" opacity=".55"/>
+  <rect x="26.5" y="27" width="11" height="8" rx="1.6" fill="#FFFFFF" opacity=".55"/>
+  <rect x="40" y="27" width="11" height="8" rx="1.6" fill="#FFFFFF" opacity=".55"/>
+  <rect x="13" y="38" width="11" height="8" rx="1.6" fill="#FFFFFF" opacity=".55"/>
+  <rect x="26.5" y="38" width="11" height="8" rx="1.6" fill="#FFFFFF" opacity=".55"/>
+  <!-- La cellule active, seule note de couleur -->
+  <rect x="40" y="38" width="11" height="8" rx="1.6" fill="#F5B301"/>
+</svg>

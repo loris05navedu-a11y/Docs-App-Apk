@@ -11,12 +11,12 @@ import (
 // formules qui les désignent doivent suivre, sinon `=SOMME(A1:A5)` continuerait
 // de pointer les anciennes lignes après une insertion.
 
-func (b *Book) InsertRow(at int)    { b.shift(at, 1, -1, 0); b.Rows++ }
-func (b *Book) DeleteRow(at int)    { b.shift(at, -1, -1, 0) }
-func (b *Book) InsertColumn(at int) { b.shift(-1, 0, at, 1); b.Columns++ }
-func (b *Book) DeleteColumn(at int) { b.shift(-1, 0, at, -1) }
+func (b *Sheet) InsertRow(at int)    { b.shift(at, 1, -1, 0); b.Rows++ }
+func (b *Sheet) DeleteRow(at int)    { b.shift(at, -1, -1, 0) }
+func (b *Sheet) InsertColumn(at int) { b.shift(-1, 0, at, 1); b.Columns++ }
+func (b *Sheet) DeleteColumn(at int) { b.shift(-1, 0, at, -1) }
 
-func (b *Book) shift(rowAt, rowDelta, colAt, colDelta int) {
+func (b *Sheet) shift(rowAt, rowDelta, colAt, colDelta int) {
 	destination := func(key string) (string, bool) {
 		row, col, ok := engine.SplitRef(key)
 		if !ok {
@@ -61,11 +61,11 @@ func (b *Book) shift(rowAt, rowDelta, colAt, colDelta int) {
 
 // Sort trie un bloc de lignes sur une colonne. Le contenu brut est déplacé en
 // bloc : chaque ligne garde ses cellules côte à côte.
-func (b *Book) Sort(column, firstRow, lastRow int, ascending bool) {
+func (b *Sheet) Sort(column, firstRow, lastRow int, ascending bool) {
 	if lastRow <= firstRow {
 		return
 	}
-	cells := b.EngineCells()
+	cells := b.localCells()
 	order := make([]int, 0, lastRow-firstRow+1)
 	for r := firstRow; r <= lastRow; r++ {
 		order = append(order, r)
@@ -141,8 +141,10 @@ func AdjustFormula(value string, rowAt, rowDelta, colAt, colDelta int) string {
 	i := 1
 	for i < len(value) {
 		ch := value[i]
-		if ch == '"' {
-			end := strings.IndexByte(value[i+1:], '"')
+		if ch == '"' || ch == '\'' {
+			// Texte littéral, ou nom de feuille entre apostrophes : dans les
+			// deux cas le contenu n'est pas une référence.
+			end := strings.IndexByte(value[i+1:], ch)
 			if end < 0 {
 				out.WriteString(value[i:])
 				break
@@ -161,7 +163,11 @@ func AdjustFormula(value string, rowAt, rowDelta, colAt, colDelta int) string {
 				j++
 			}
 			// Un nom suivi d'une parenthèse est une fonction, pas une référence.
-			isReference := lettersEnd > i && j > lettersEnd && (j >= len(value) || value[j] != '(')
+			// Ce qui suit un « ! » appartient à une autre feuille : on ne
+			// décale pas ses références en modifiant celle-ci.
+			isReference := lettersEnd > i && j > lettersEnd &&
+				(j >= len(value) || (value[j] != '(' && value[j] != '!')) &&
+				value[i-1] != '!'
 			if isReference {
 				out.WriteString(moveReference(value[i:j], rowAt, rowDelta, colAt, colDelta))
 				i = j
@@ -202,4 +208,14 @@ func isDigit(c byte) bool  { return c >= '0' && c <= '9' }
 func isLetter(c byte) bool { return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' }
 func isLetterOrDigit(c byte) bool {
 	return isLetter(c) || isDigit(c)
+}
+
+// localCells donne au tri une vue de la seule feuille concernée : classer des
+// lignes n'a pas à consulter le reste du classeur.
+func (b *Sheet) localCells() engine.Cells {
+	out := make(engine.Cells, len(b.Cells))
+	for k, v := range b.Cells {
+		out[k] = v
+	}
+	return out
 }
