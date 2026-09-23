@@ -234,4 +234,37 @@ class ForeignDocumentsTest {
             }
         }
     }
+
+    @Test
+    fun `mises en page, puces, pied de page et numeros survivent a l aller-retour`() {
+        val deck = Deck(
+            title = "Plan",
+            slides = listOf(
+                SlideModel(title = "Chapitre 1", content = "Introduction", layout = SlideLayout.SECTION),
+                SlideModel(title = "Avant / après", content = "Lent\nCher", secondContent = "Rapide\nÉconome",
+                    layout = SlideLayout.TWO_COLUMNS, bullets = true),
+                SlideModel(title = "Points", content = "Un\nDeux", bullets = true),
+                SlideModel(title = "Texte", content = "Sans puce")
+            ),
+            footer = "Réunion de septembre",
+            slideNumbers = true
+        )
+        listOf(FileFormat.PPTX, FileFormat.ODP).forEach { format ->
+            val back = (FileFormats.import("x.${format.extension}", FileFormats.exportDeck(format, deck)) as Imported.AsDeck).deck
+            val label = format.label
+            assertEquals(label, 4, back.slides.size)
+            assertEquals(label, SlideLayout.SECTION, back.slides[0].layout)
+            assertEquals(label, SlideLayout.TWO_COLUMNS, back.slides[1].layout)
+            assertEquals(label, "Lent\nCher", back.slides[1].content)
+            assertEquals(label, "Rapide\nÉconome", back.slides[1].secondContent)
+            assertTrue(label, back.slides[1].bullets)
+            assertTrue(label, back.slides[2].bullets)
+            assertEquals(label, "Un\nDeux", back.slides[2].content)
+            assertFalse(label, back.slides[3].bullets)
+            assertEquals(label, "Réunion de septembre", back.footer)
+            assertTrue(label, back.slideNumbers)
+            // Le pied de page et le numéro ne se mêlent pas au contenu.
+            back.slides.forEach { assertFalse(label, it.content.contains("Réunion")) }
+        }
+    }
 }

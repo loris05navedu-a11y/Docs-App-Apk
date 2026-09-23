@@ -19,6 +19,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,6 +52,17 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.filled.FormatAlignLeft
+import androidx.compose.material.icons.filled.FormatAlignRight
+import androidx.compose.material.icons.filled.FormatListBulleted
+import androidx.compose.material.icons.filled.FormatSize
+import androidx.compose.material.icons.filled.Redo
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -71,6 +83,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -112,7 +125,9 @@ import com.docssuite.fileformats.DocKind
 import com.docssuite.fileformats.FileFormat
 import com.docssuite.fileformats.FileFormats
 import com.docssuite.fileformats.Imported
+import com.docssuite.fileformats.SlideLayout
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -128,8 +143,16 @@ internal data class Slide(
     val align: Int = 1,
     val fontIndex: Int = 0,
     val transition: Int = 1,
-    val notes: String = ""
+    val notes: String = "",
+    /** Voir [SlideLayout]. */
+    val layout: Int = SlideLayout.TITLE_AND_CONTENT,
+    val secondContent: String = "",
+    val bullets: Boolean = false
 )
+
+private val LayoutNames = listOf("Titre et contenu", "Section", "Deux colonnes")
+
+private data class DeckSnapshot(val slides: List<Slide>, val settings: DeckSettings)
 
 private val TransitionNames = listOf(
     "Aucune",
@@ -188,18 +211,54 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
     var sizeTargetIndex by remember { mutableStateOf(-1) }
     var transitionTargetIndex by remember { mutableStateOf(-1) }
     var showAllTransitions by remember { mutableStateOf(false) }
+    var settings by remember { mutableStateOf(DeckSettings()) }
+    var showFooter by remember { mutableStateOf(false) }
+
+    val undoStack = remember { mutableListOf<DeckSnapshot>() }
+    val redoStack = remember { mutableListOf<DeckSnapshot>() }
+    var historyVersion by remember { mutableStateOf(0) }
+    // Taper du texte crée une étape par modification ; on les regroupe par
+    // diapositive et par champ tant que l'utilisateur écrit au même endroit.
+    var lastEdit by remember { mutableStateOf("") }
+
+    fun pushUndo(editKey: String = "") {
+        if (editKey.isNotEmpty() && editKey == lastEdit) return
+        lastEdit = editKey
+        undoStack.add(DeckSnapshot(slides.toList(), settings))
+        if (undoStack.size > 80) undoStack.removeAt(0)
+        redoStack.clear()
+        historyVersion++
+    }
+
+    fun restore(snapshot: DeckSnapshot) {
+        slides.clear(); slides.addAll(snapshot.slides)
+        settings = snapshot.settings
+        lastEdit = ""
+        historyVersion++
+    }
+
+    fun resetHistory() {
+        undoStack.clear(); redoStack.clear(); lastEdit = ""; historyVersion++
+    }
 
     fun deckAsText(): String = slides.mapIndexed { index, slide ->
-        "— Slide ${index + 1} —\n${slide.title}\n${slide.content}"
+        "— Slide ${index + 1} —\n${slide.title}\n${slide.content}" +
+            if (slide.secondContent.isNotBlank()) "\n${slide.secondContent}" else ""
     }.joinToString("\n\n")
 
     fun openDocument(id: String, name: String) {
-        val decoded = storage.load(id)?.let { decodeDeck(it) } ?: return
-        if (decoded.isEmpty()) return
+        val payload = storage.load(id) ?: return
+        val decoded = runCatching { decodeDeck(payload) }.getOrNull()
+        if (decoded.isNullOrEmpty()) {
+            notice = "Ouverture impossible" to "« $name » est endommagée."
+            return
+        }
         slides.clear()
         slides.addAll(decoded)
+        settings = decodeSettings(payload)
         docId = id
         docName = name
+        resetHistory()
     }
 
     LaunchedEffect(initialDocId) {
@@ -209,7 +268,7 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
         }
     }
 
-    fun currentDeck() = buildDeck(docName, slides.toList())
+    fun currentDeck() = buildDeck(docName, slides.toList(), settings)
 
     val fileSaver = rememberFileSaver(
         onError = { notice = "Enregistrement impossible" to it },
@@ -234,10 +293,12 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
                         } else {
                             slides.clear()
                             slides.addAll(decoded)
+                            settings = settingsOf(imported.deck)
                             // Un import devient une nouvelle présentation : on ne
                             // veut pas écraser celle qui était ouverte.
                             docId = storage.newId()
                             docName = imported.suggestedName
+                            resetHistory()
                         }
                     } else {
                         notice = "Ce n'est pas une présentation" to
@@ -299,8 +360,26 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
                             tint = MaterialTheme.colorScheme.primary
                         )
                     }
+                    key(historyVersion) {
+                        IconButton(onClick = {
+                            undoStack.removeLastOrNull()?.let { previous ->
+                                redoStack.add(DeckSnapshot(slides.toList(), settings))
+                                restore(previous)
+                            }
+                        }, enabled = undoStack.isNotEmpty()) {
+                            Icon(Icons.Filled.Undo, contentDescription = "Annuler")
+                        }
+                        IconButton(onClick = {
+                            redoStack.removeLastOrNull()?.let { next ->
+                                undoStack.add(DeckSnapshot(slides.toList(), settings))
+                                restore(next)
+                            }
+                        }, enabled = redoStack.isNotEmpty()) {
+                            Icon(Icons.Filled.Redo, contentDescription = "Rétablir")
+                        }
+                    }
                     IconButton(onClick = {
-                        storage.save(docId, docName, DocType.DECK, encodeDeck(slides))
+                        storage.save(docId, docName, DocType.DECK, encodeDeck(slides, settings))
                         notice = "Présentation enregistrée" to
                             "« $docName » a bien été enregistrée dans l'application."
                     }) {
@@ -316,9 +395,11 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
                                 onClick = {
                                     showMenu = false
                                     slides.clear()
-                                    slides.add(Slide(title = "Nouvelle présentation"))
+                                    slides.add(Slide(title = "Nouvelle présentation", layout = SlideLayout.SECTION))
+                                    settings = DeckSettings()
                                     docId = storage.newId()
                                     docName = "Présentation sans titre"
+                                    resetHistory()
                                 }
                             )
                             DropdownMenuItem(
@@ -336,6 +417,10 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
                             DropdownMenuItem(
                                 text = { Text("Transition pour toutes les slides") },
                                 onClick = { showMenu = false; showAllTransitions = true }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Pied de page et numéros…") },
+                                onClick = { showMenu = false; showFooter = true }
                             )
                             Divider()
                             DropdownMenuItem(
@@ -367,6 +452,7 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = {
+                    pushUndo()
                     val model = slides.lastOrNull() ?: Slide()
                     slides.add(
                         Slide(
@@ -394,21 +480,37 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
                     index = index,
                     slide = slides[index],
                     total = slides.size,
-                    onChange = { slides[index] = it },
+                    settings = settings,
+                    onChange = { updated ->
+                        val before = slides[index]
+                        // Une frappe dans un champ ne crée qu'une étape d'annulation
+                        // tant qu'on reste dans ce champ ; tout autre réglage en crée une.
+                        val field = when {
+                            updated.copy(title = before.title) == before -> "t$index"
+                            updated.copy(content = before.content) == before -> "c$index"
+                            updated.copy(secondContent = before.secondContent) == before -> "s$index"
+                            updated.copy(notes = before.notes) == before -> "n$index"
+                            else -> ""
+                        }
+                        pushUndo(field)
+                        slides[index] = updated
+                    },
                     onMoveUp = {
+                        pushUndo()
                         if (index > 0) {
                             val slide = slides.removeAt(index)
                             slides.add(index - 1, slide)
                         }
                     },
                     onMoveDown = {
+                        pushUndo()
                         if (index < slides.size - 1) {
                             val slide = slides.removeAt(index)
                             slides.add(index + 1, slide)
                         }
                     },
-                    onDuplicate = { slides.add(index + 1, slides[index].copy()) },
-                    onDelete = { if (slides.size > 1) slides.removeAt(index) },
+                    onDuplicate = { pushUndo(); slides.add(index + 1, slides[index].copy()) },
+                    onDelete = { if (slides.size > 1) { pushUndo(); slides.removeAt(index) } },
                     onPickBackground = { colorTargetIndex = index; colorTargetIsBackground = true },
                     onPickTextColor = { colorTargetIndex = index; colorTargetIsBackground = false },
                     onPickFont = { fontTargetIndex = index },
@@ -420,7 +522,7 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
     }
 
     if (playing) {
-        SlideShow(slides = slides.toList(), onExit = { playing = false })
+        SlideShow(slides = slides.toList(), settings = settings, onExit = { playing = false })
     }
 
     if (colorTargetIndex >= 0) {
@@ -430,6 +532,7 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
             colors = EditorColors,
             onPick = { color ->
                 if (color != null && index < slides.size) {
+                    pushUndo()
                     val argb = colorToLong(color)
                     slides[index] = if (colorTargetIsBackground) {
                         slides[index].copy(background = argb)
@@ -455,6 +558,7 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
             },
             onPick = { font ->
                 if (index < slides.size) {
+                    pushUndo()
                     slides[index] = slides[index].copy(fontIndex = AppFonts.indexOf(font))
                 }
                 fontTargetIndex = -1
@@ -472,6 +576,7 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
             selected = slides.getOrNull(index)?.titleSize,
             onPick = { size ->
                 if (index < slides.size) {
+                    pushUndo()
                     slides[index] = slides[index].copy(
                         titleSize = size,
                         contentSize = (size * 0.62f).toInt().coerceAtLeast(12)
@@ -507,6 +612,7 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
             label = { it },
             onPick = { name ->
                 val kind = TransitionNames.indexOf(name)
+                pushUndo()
                 for (i in slides.indices) {
                     slides[i] = slides[i].copy(transition = kind)
                 }
@@ -534,12 +640,25 @@ fun PresentationScreen(onBack: () -> Unit, initialDocId: String? = null) {
                 }
             },
             onPick = { theme ->
+                pushUndo()
                 for (i in slides.indices) {
                     slides[i] = slides[i].copy(background = theme.background, textColor = theme.text)
                 }
                 showThemes = false
             },
             onDismiss = { showThemes = false }
+        )
+    }
+
+    if (showFooter) {
+        FooterDialog(
+            initial = settings,
+            onConfirm = {
+                pushUndo()
+                settings = it
+                showFooter = false
+            },
+            onDismiss = { showFooter = false }
         )
     }
 
@@ -590,6 +709,7 @@ private fun SlideEditorCard(
     index: Int,
     slide: Slide,
     total: Int,
+    settings: DeckSettings,
     onChange: (Slide) -> Unit,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
@@ -606,55 +726,44 @@ private fun SlideEditorCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
     ) {
         Column {
-            // Aperçu de la slide
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(120.dp)
-                    .background(Color(slide.background))
-                    .padding(12.dp),
-                contentAlignment = when (slide.align) {
-                    0 -> Alignment.CenterStart
-                    2 -> Alignment.CenterEnd
-                    else -> Alignment.Center
-                }
-            ) {
-                Column(horizontalAlignment = alignmentFor(slide.align)) {
-                    Text(
-                        slide.title.ifBlank { "Titre de la slide" },
-                        color = Color(slide.textColor),
-                        fontSize = (slide.titleSize * 0.5f).sp,
-                        fontWeight = FontWeight.Bold,
-                        style = TextStyle(fontFamily = fontFamilyAt(slide.fontIndex)),
-                        textAlign = textAlignFor(slide.align),
-                        maxLines = 2
-                    )
-                    if (slide.content.isNotBlank()) {
-                        Text(
-                            slide.content,
-                            color = Color(slide.textColor).copy(alpha = 0.85f),
-                            fontSize = (slide.contentSize * 0.5f).sp,
-                            style = TextStyle(fontFamily = fontFamilyAt(slide.fontIndex)),
-                            textAlign = textAlignFor(slide.align),
-                            maxLines = 3
-                        )
-                    }
-                }
+            // Aperçu de la slide, en 16:9 comme à la projection.
+            Box {
+                SlideCanvas(
+                    slide = slide,
+                    settings = settings,
+                    number = index + 1,
+                    scale = 0.5f,
+                    modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                )
                 Text(
                     "${index + 1}/$total",
-                    modifier = Modifier.align(Alignment.TopEnd),
+                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
                     color = Color(slide.textColor).copy(alpha = 0.6f),
                     fontSize = 11.sp
                 )
                 Text(
                     transitionName(slide.transition),
-                    modifier = Modifier.align(Alignment.TopStart),
+                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
                     color = Color(slide.textColor).copy(alpha = 0.6f),
                     fontSize = 11.sp
                 )
             }
 
             Column(modifier = Modifier.padding(12.dp)) {
+                // Mise en page.
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    LayoutNames.forEachIndexed { layout, name ->
+                        FilterChip(
+                            selected = slide.layout == layout,
+                            onClick = { onChange(slide.copy(layout = layout)) },
+                            label = { Text(name) }
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(6.dp))
                 OutlinedTextField(
                     value = slide.title,
                     onValueChange = { onChange(slide.copy(title = it)) },
@@ -667,8 +776,25 @@ private fun SlideEditorCard(
                     value = slide.content,
                     onValueChange = { onChange(slide.copy(content = it)) },
                     modifier = Modifier.fillMaxWidth().height(110.dp),
-                    label = { Text("Contenu") }
+                    label = {
+                        Text(
+                            when (slide.layout) {
+                                SlideLayout.SECTION -> "Sous-titre"
+                                SlideLayout.TWO_COLUMNS -> "Colonne de gauche"
+                                else -> "Contenu"
+                            }
+                        )
+                    }
                 )
+                if (slide.layout == SlideLayout.TWO_COLUMNS) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = slide.secondContent,
+                        onValueChange = { onChange(slide.copy(secondContent = it)) },
+                        modifier = Modifier.fillMaxWidth().height(110.dp),
+                        label = { Text("Colonne de droite") }
+                    )
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = slide.notes,
@@ -682,6 +808,13 @@ private fun SlideEditorCard(
                     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    IconButton(onClick = { onChange(slide.copy(bullets = !slide.bullets)) }, enabled = slide.layout != SlideLayout.SECTION) {
+                        Icon(
+                            Icons.Filled.FormatListBulleted,
+                            contentDescription = if (slide.bullets) "Retirer les puces" else "Liste à puces",
+                            tint = if (slide.bullets) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     IconButton(onClick = onPickBackground) {
                         Icon(Icons.Filled.FormatColorFill, contentDescription = "Couleur de fond")
                     }
@@ -692,11 +825,15 @@ private fun SlideEditorCard(
                         Icon(Icons.Filled.TextFields, contentDescription = "Police")
                     }
                     IconButton(onClick = onPickSize) {
-                        Icon(Icons.Filled.FormatAlignCenter, contentDescription = "Taille")
+                        Icon(Icons.Filled.FormatSize, contentDescription = "Taille")
                     }
                     IconButton(onClick = { onChange(slide.copy(align = (slide.align + 1) % 3)) }) {
                         Icon(
-                            Icons.Filled.FormatAlignCenter,
+                            when (slide.align) {
+                                0 -> Icons.Filled.FormatAlignLeft
+                                2 -> Icons.Filled.FormatAlignRight
+                                else -> Icons.Filled.FormatAlignCenter
+                            },
                             contentDescription = "Alignement",
                             tint = MaterialTheme.colorScheme.primary
                         )
@@ -726,6 +863,130 @@ private fun SlideEditorCard(
     }
 }
 
+/** Le texte d'un corps, avec une puce devant chaque ligne si demandé. */
+private fun bodyText(text: String, bullets: Boolean): String =
+    if (!bullets) text else text.lines().joinToString("\n") { if (it.isBlank()) it else "•  $it" }
+
+/**
+ * Une diapositive dessinée, identique dans l'aperçu, le diaporama et la vue
+ * présentateur : [scale] règle la taille des textes (1 = projection).
+ */
+@Composable
+private fun SlideCanvas(
+    slide: Slide,
+    settings: DeckSettings,
+    number: Int,
+    scale: Float,
+    modifier: Modifier = Modifier
+) {
+    val family = TextStyle(fontFamily = fontFamilyAt(slide.fontIndex))
+    val color = Color(slide.textColor)
+    val section = slide.layout == SlideLayout.SECTION
+    val align = if (section) 1 else slide.align
+    Box(modifier = modifier.background(Color(slide.background))) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = (32 * scale * 1.5f).dp, vertical = (40 * scale * 1.5f).dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = alignmentFor(align)
+        ) {
+            if (slide.title.isNotBlank() || scale < 1f) {
+                Text(
+                    slide.title.ifBlank { "Titre de la slide" },
+                    color = if (slide.title.isBlank()) color.copy(alpha = 0.45f) else color,
+                    fontSize = (slide.titleSize * scale * if (section) 1.25f else 1f).sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = textAlignFor(align),
+                    style = family,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            val hasBody = slide.content.isNotBlank() ||
+                (slide.layout == SlideLayout.TWO_COLUMNS && slide.secondContent.isNotBlank())
+            if (hasBody) {
+                Spacer(modifier = Modifier.height((20 * scale).dp))
+                if (slide.layout == SlideLayout.TWO_COLUMNS) {
+                    Row(horizontalArrangement = Arrangement.spacedBy((24 * scale).dp)) {
+                        listOf(slide.content, slide.secondContent).forEach { column ->
+                            Text(
+                                bodyText(column, slide.bullets),
+                                color = color.copy(alpha = 0.92f),
+                                fontSize = (slide.contentSize * scale).sp,
+                                textAlign = textAlignFor(slide.align),
+                                style = family,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                } else {
+                    Text(
+                        bodyText(slide.content, slide.bullets && !section),
+                        color = color.copy(alpha = if (section) 0.75f else 0.92f),
+                        fontSize = (slide.contentSize * scale).sp,
+                        textAlign = textAlignFor(align),
+                        style = family,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+        if (settings.footer.isNotBlank()) {
+            Text(
+                settings.footer,
+                modifier = Modifier.align(Alignment.BottomStart).padding((16 * scale * 1.5f).dp),
+                color = color.copy(alpha = 0.65f),
+                fontSize = (13 * scale * 1.3f).sp,
+                maxLines = 1
+            )
+        }
+        if (settings.slideNumbers) {
+            Text(
+                "$number",
+                modifier = Modifier.align(Alignment.BottomEnd).padding((16 * scale * 1.5f).dp),
+                color = color.copy(alpha = 0.65f),
+                fontSize = (13 * scale * 1.3f).sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun FooterDialog(initial: DeckSettings, onConfirm: (DeckSettings) -> Unit, onDismiss: () -> Unit) {
+    var footer by remember { mutableStateOf(initial.footer) }
+    var numbers by remember { mutableStateOf(initial.slideNumbers) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Pied de page et numéros") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = footer,
+                    onValueChange = { footer = it },
+                    label = { Text("Texte du pied de page") },
+                    placeholder = { Text("Ex. : Réunion du 12 mars") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.clickable { numbers = !numbers }
+                ) {
+                    Checkbox(checked = numbers, onCheckedChange = { numbers = it })
+                    Text("Numéroter les diapositives")
+                }
+                Text(
+                    "Ils apparaissent sur toutes les diapositives, et passent dans PowerPoint, OpenDocument et PDF.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onConfirm(DeckSettings(footer.trim(), numbers)) }) { Text("Appliquer") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Annuler") } }
+    )
+}
+
 private fun transitionFor(kind: Int, forward: Boolean): ContentTransform {
     val spec = tween<Float>(durationMillis = 420)
     val slideSpec = tween<IntOffset>(durationMillis = 420)
@@ -743,158 +1004,224 @@ private fun transitionFor(kind: Int, forward: Boolean): ContentTransform {
     }
 }
 
-/** Diaporama plein écran : clic à droite = slide suivante, à gauche = précédente. */
+/**
+ * Diaporama plein écran : toucher à droite avance, à gauche recule. Le mode
+ * présentateur ajoute, sur l'appareil, un chronomètre, la diapositive
+ * suivante et les notes.
+ */
 @Composable
-private fun SlideShow(slides: List<Slide>, onExit: () -> Unit) {
+private fun SlideShow(slides: List<Slide>, settings: DeckSettings, onExit: () -> Unit) {
     var index by remember { mutableStateOf(0) }
     var forward by remember { mutableStateOf(true) }
     var showNotes by remember { mutableStateOf(false) }
+    var presenter by remember { mutableStateOf(false) }
+    var elapsed by remember { mutableStateOf(0L) }
+    var startedAt by remember { mutableStateOf(System.currentTimeMillis()) }
     val slide = slides.getOrNull(index) ?: return
+
+    // Le chronomètre ne tourne que lorsqu'on l'affiche.
+    LaunchedEffect(startedAt, presenter) {
+        if (!presenter) return@LaunchedEffect
+        while (true) {
+            elapsed = (System.currentTimeMillis() - startedAt) / 1000
+            delay(500)
+        }
+    }
+
+    fun next() {
+        if (index < slides.size - 1) {
+            forward = true
+            index++
+        } else {
+            onExit()
+        }
+    }
+
+    fun previous() {
+        if (index > 0) {
+            forward = false
+            index--
+        }
+    }
 
     Dialog(
         onDismissRequest = onExit,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color(slide.background))
-                .pointerInput(slides.size) {
-                    detectTapGestures { offset ->
-                        if (offset.x > size.width / 2) {
-                            if (index < slides.size - 1) {
-                                forward = true
-                                index++
-                            } else {
-                                onExit()
-                            }
-                        } else if (index > 0) {
-                            forward = false
-                            index--
-                        }
-                    }
-                }
-        ) {
-            AnimatedContent(
-                targetState = index,
-                transitionSpec = {
-                    transitionFor(slides.getOrNull(targetState)?.transition ?: 1, forward)
-                },
-                label = "slide"
-            ) { slideIndex ->
-                val current = slides.getOrNull(slideIndex) ?: return@AnimatedContent
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color(current.background))
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 32.dp, vertical = 64.dp),
-                        verticalArrangement = Arrangement.Center,
-                        horizontalAlignment = alignmentFor(current.align)
-                    ) {
-                        Text(
-                            current.title,
-                            color = Color(current.textColor),
-                            fontSize = current.titleSize.sp,
-                            fontWeight = FontWeight.Bold,
-                            textAlign = textAlignFor(current.align),
-                            style = TextStyle(fontFamily = fontFamilyAt(current.fontIndex)),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        if (current.content.isNotBlank()) {
-                            Spacer(modifier = Modifier.height(24.dp))
-                            Text(
-                                current.content,
-                                color = Color(current.textColor).copy(alpha = 0.9f),
-                                fontSize = current.contentSize.sp,
-                                textAlign = textAlignFor(current.align),
-                                style = TextStyle(fontFamily = fontFamilyAt(current.fontIndex)),
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-                    }
-                }
-            }
-
-            Row(modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)) {
-                if (slides.any { it.notes.isNotBlank() }) {
-                    IconButton(onClick = { showNotes = !showNotes }) {
-                        Icon(
-                            Icons.Filled.Notes,
-                            contentDescription = if (showNotes) "Masquer les notes" else "Afficher les notes",
-                            tint = Color(slide.textColor)
-                                .copy(alpha = if (showNotes) 1f else 0.7f)
-                        )
-                    }
-                }
-                IconButton(onClick = onExit) {
-                    Icon(
-                        Icons.Filled.Close,
-                        contentDescription = "Quitter le diaporama",
-                        tint = Color(slide.textColor).copy(alpha = 0.7f)
-                    )
-                }
-            }
-
-            // Les notes se posent par-dessus la diapositive, sur un fond opaque :
-            // elles ne doivent jamais se confondre avec le contenu projeté.
-            if (showNotes && slide.notes.isNotBlank()) {
-                Surface(
-                    color = Color(0xE6101828),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(start = 20.dp, end = 20.dp, bottom = 56.dp)
-                        .fillMaxWidth(0.9f)
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Text(
-                            "Notes",
-                            color = Color(0xFF9CA3AF),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            slide.notes,
-                            color = Color.White,
-                            fontSize = 14.sp,
-                            modifier = Modifier
-                                .heightIn(max = 160.dp)
-                                .verticalScroll(rememberScrollState())
-                        )
-                    }
-                }
-            }
-
-            Row(
+        Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+            Box(
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 24.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(Color(slide.background))
+                    .pointerInput(slides.size) {
+                        detectTapGestures { offset ->
+                            if (offset.x > size.width / 2) next() else previous()
+                        }
+                    }
             ) {
-                slides.indices.forEach { i ->
-                    Box(
-                        modifier = Modifier
-                            .size(if (i == index) 10.dp else 7.dp)
-                            .background(
-                                Color(slide.textColor).copy(alpha = if (i == index) 0.95f else 0.35f),
-                                CircleShape
-                            )
+                AnimatedContent(
+                    targetState = index,
+                    transitionSpec = {
+                        transitionFor(slides.getOrNull(targetState)?.transition ?: 1, forward)
+                    },
+                    label = "slide"
+                ) { slideIndex ->
+                    val current = slides.getOrNull(slideIndex) ?: return@AnimatedContent
+                    SlideCanvas(
+                        slide = current,
+                        settings = settings,
+                        number = slideIndex + 1,
+                        scale = 1f,
+                        modifier = Modifier.fillMaxSize()
                     )
+                }
+
+                Row(modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)) {
+                    IconButton(onClick = { presenter = !presenter }) {
+                        Icon(
+                            Icons.Filled.Timer,
+                            contentDescription = if (presenter) "Quitter le mode présentateur" else "Mode présentateur",
+                            tint = Color(slide.textColor).copy(alpha = if (presenter) 1f else 0.7f)
+                        )
+                    }
+                    if (!presenter && slides.any { it.notes.isNotBlank() }) {
+                        IconButton(onClick = { showNotes = !showNotes }) {
+                            Icon(
+                                Icons.Filled.Notes,
+                                contentDescription = if (showNotes) "Masquer les notes" else "Afficher les notes",
+                                tint = Color(slide.textColor)
+                                    .copy(alpha = if (showNotes) 1f else 0.7f)
+                            )
+                        }
+                    }
+                    IconButton(onClick = onExit) {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = "Quitter le diaporama",
+                            tint = Color(slide.textColor).copy(alpha = 0.7f)
+                        )
+                    }
+                }
+
+                // Les notes se posent par-dessus la diapositive, sur un fond opaque :
+                // elles ne doivent jamais se confondre avec le contenu projeté.
+                if (!presenter && showNotes && slide.notes.isNotBlank()) {
+                    Surface(
+                        color = Color(0xE6101828),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(start = 20.dp, end = 20.dp, bottom = 56.dp)
+                            .fillMaxWidth(0.9f)
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text("Notes", color = Color(0xFF9CA3AF), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                slide.notes,
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                modifier = Modifier
+                                    .heightIn(max = 160.dp)
+                                    .verticalScroll(rememberScrollState())
+                            )
+                        }
+                    }
+                }
+
+                if (!presenter) {
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 24.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        slides.indices.forEach { i ->
+                            Box(
+                                modifier = Modifier
+                                    .size(if (i == index) 10.dp else 7.dp)
+                                    .background(
+                                        Color(slide.textColor).copy(alpha = if (i == index) 0.95f else 0.35f),
+                                        CircleShape
+                                    )
+                            )
+                        }
+                    }
                 }
             }
 
-            Text(
-                "${index + 1} / ${slides.size}",
-                modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
-                color = Color(slide.textColor).copy(alpha = 0.6f),
-                fontSize = 13.sp
-            )
+            if (presenter) {
+                PresenterPanel(
+                    slides = slides,
+                    index = index,
+                    settings = settings,
+                    elapsed = elapsed,
+                    onPrevious = ::previous,
+                    onNext = ::next,
+                    onResetTimer = { startedAt = System.currentTimeMillis(); elapsed = 0 }
+                )
+            }
+        }
+    }
+}
+
+/** Vue présentateur : chronomètre, diapositive suivante, notes et navigation. */
+@Composable
+private fun PresenterPanel(
+    slides: List<Slide>,
+    index: Int,
+    settings: DeckSettings,
+    elapsed: Long,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onResetTimer: () -> Unit
+) {
+    Surface(color = Color(0xFF111827), modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "%02d:%02d".format(elapsed / 60, elapsed % 60),
+                    color = Color.White,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                TextButton(onClick = onResetTimer) { Text("Remettre à zéro", color = Color(0xFF93C5FD)) }
+                Spacer(modifier = Modifier.weight(1f))
+                Text("${index + 1} / ${slides.size}", color = Color(0xFFD1D5DB), fontSize = 15.sp)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.heightIn(max = 180.dp)) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Suivante", color = Color(0xFF9CA3AF), fontSize = 11.sp)
+                    val next = slides.getOrNull(index + 1)
+                    if (next != null) {
+                        SlideCanvas(
+                            slide = next,
+                            settings = settings,
+                            number = index + 2,
+                            scale = 0.3f,
+                            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                        )
+                    } else {
+                        Text("Fin du diaporama", color = Color.White, fontSize = 14.sp)
+                    }
+                }
+                Column(modifier = Modifier.weight(1.4f)) {
+                    Text("Notes", color = Color(0xFF9CA3AF), fontSize = 11.sp)
+                    Text(
+                        slides[index].notes.ifBlank { "Aucune note pour cette diapositive." },
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        modifier = Modifier.verticalScroll(rememberScrollState())
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onPrevious, enabled = index > 0) { Text("◀ Précédente", color = Color.White) }
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(onClick = onNext) { Text(if (index < slides.size - 1) "Suivante ▶" else "Terminer", color = Color.White) }
+            }
         }
     }
 }
@@ -911,7 +1238,7 @@ private fun textAlignFor(align: Int): TextAlign = when (align) {
     else -> TextAlign.Center
 }
 
-internal fun encodeDeck(slides: List<Slide>): String {
+internal fun encodeDeck(slides: List<Slide>, settings: DeckSettings = DeckSettings()): String {
     val array = JSONArray()
     slides.forEach { slide ->
         array.put(JSONObject().apply {
@@ -925,10 +1252,22 @@ internal fun encodeDeck(slides: List<Slide>): String {
             put("fi", slide.fontIndex)
             put("tr", slide.transition)
             put("nt", slide.notes)
+            put("ly", slide.layout)
+            put("c2", slide.secondContent)
+            put("bu", slide.bullets)
         })
     }
-    return JSONObject().apply { put("slides", array) }.toString()
+    return JSONObject().apply {
+        put("slides", array)
+        put("footer", settings.footer)
+        put("numbers", settings.slideNumbers)
+    }.toString()
 }
+
+internal fun decodeSettings(payload: String): DeckSettings = runCatching {
+    val root = JSONObject(payload)
+    DeckSettings(root.optString("footer"), root.optBoolean("numbers"))
+}.getOrDefault(DeckSettings())
 
 internal fun decodeDeck(payload: String): List<Slide> {
     val array = JSONObject(payload).optJSONArray("slides") ?: return emptyList()
@@ -946,7 +1285,10 @@ internal fun decodeDeck(payload: String): List<Slide> {
                 align = o.optInt("al", 1),
                 fontIndex = o.optInt("fi", 0),
                 transition = o.optInt("tr", 1),
-                notes = o.optString("nt")
+                notes = o.optString("nt"),
+                layout = o.optInt("ly", 0).coerceIn(0, 2),
+                secondContent = o.optString("c2"),
+                bullets = o.optBoolean("bu", false)
             )
         )
     }

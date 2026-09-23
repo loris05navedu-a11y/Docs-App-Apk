@@ -439,10 +439,16 @@ object Markdown {
     }
 
     fun write(deck: Deck): String = buildString {
+        fun body(text: String, bullets: Boolean) = if (!bullets) text
+        else text.lines().joinToString("\n") { if (it.isBlank()) it else "- $it" }
         deck.slides.forEachIndexed { index, slide ->
             if (index > 0) append("\n---\n\n")
             if (slide.title.isNotBlank()) append("## ").append(slide.title).append("\n\n")
-            if (slide.content.isNotBlank()) append(slide.content).append("\n")
+            if (slide.content.isNotBlank()) append(body(slide.content, slide.bullets)).append("\n")
+            if (slide.secondContent.isNotBlank()) append("\n").append(body(slide.secondContent, slide.bullets)).append("\n")
+            if (deck.footer.isNotBlank() || deck.slideNumbers) {
+                append("\n_").append(listOf(deck.footer, if (deck.slideNumbers) "${index + 1}" else "").filter { it.isNotBlank() }.joinToString(" · ")).append("_\n")
+            }
         }
     }
 

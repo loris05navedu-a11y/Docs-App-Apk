@@ -37,7 +37,7 @@ object Pptx {
             .add("ppt/theme/theme1.xml", theme())
         slides.forEachIndexed { index, slide ->
             val hasNotes = slide.notes.isNotBlank()
-            zip.add("ppt/slides/slide${index + 1}.xml", slideXml(slide))
+            zip.add("ppt/slides/slide${index + 1}.xml", slideXml(slide, index + 1, deck))
             zip.add("ppt/slides/_rels/slide${index + 1}.xml.rels", slideRels(hasNotes, index + 1))
             if (hasNotes) {
                 zip.add("ppt/notesSlides/notesSlide${index + 1}.xml", notesSlideXml(slide.notes))
@@ -185,26 +185,74 @@ object Pptx {
         "<p:cSld name=\"Vide\"><p:spTree>${emptyShapeTree()}</p:spTree></p:cSld>" +
         "<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>"
 
-    private fun slideXml(slide: SlideModel): String {
+    /**
+     * Titre et contenus sont de vrais espaces réservés (titre, corps) : c'est
+     * ce qui permet à PowerPoint — et à cette app à la relecture — de savoir
+     * lequel est le titre et quelles colonnes forment le corps.
+     */
+    private fun slideXml(slide: SlideModel, number: Int, deck: Deck): String {
         val shapes = StringBuilder()
         var id = 2
+        val margin = 685800
+        val width = SLIDE_WIDTH - 2 * margin
+        val section = slide.layout == SlideLayout.SECTION
         if (slide.title.isNotBlank()) {
             shapes.append(
                 textShape(
                     id = id++, name = "Titre", text = slide.title,
-                    x = 685800, y = 800100, cx = SLIDE_WIDTH - 2 * 685800, cy = 1600200,
+                    x = margin, y = if (section) 1828800 else 800100, cx = width, cy = if (section) 1828800 else 1600200,
                     size = slide.titleSize, bold = true,
-                    color = slide.textColor, align = slide.align, font = slide.fontName
+                    color = slide.textColor, align = if (section) 1 else slide.align, font = slide.fontName,
+                    placeholder = if (section) "<p:ph type=\"ctrTitle\"/>" else "<p:ph type=\"title\"/>"
                 )
             )
         }
-        if (slide.content.isNotBlank()) {
+        val contentTop = if (section) 3771900 else 2590800
+        if (slide.layout == SlideLayout.TWO_COLUMNS) {
+            val gap = 304800
+            val column = (width - gap) / 2
+            listOf(slide.content to margin, slide.secondContent to margin + column + gap).forEachIndexed { i, (text, x) ->
+                shapes.append(
+                    textShape(
+                        id = id++, name = "Colonne ${i + 1}", text = text,
+                        x = x, y = contentTop, cx = column, cy = 3200400,
+                        size = slide.contentSize, bold = false,
+                        color = slide.textColor, align = slide.align, font = slide.fontName,
+                        placeholder = "<p:ph type=\"body\" sz=\"half\" idx=\"${i + 1}\"/>",
+                        bullets = slide.bullets
+                    )
+                )
+            }
+        } else if (slide.content.isNotBlank()) {
             shapes.append(
                 textShape(
-                    id = id, name = "Contenu", text = slide.content,
-                    x = 685800, y = 2590800, cx = SLIDE_WIDTH - 2 * 685800, cy = 3200400,
+                    id = id++, name = "Contenu", text = slide.content,
+                    x = margin, y = contentTop, cx = width, cy = if (section) 1371600 else 3200400,
                     size = slide.contentSize, bold = false,
-                    color = slide.textColor, align = slide.align, font = slide.fontName
+                    color = slide.textColor, align = if (section) 1 else slide.align, font = slide.fontName,
+                    placeholder = if (section) "<p:ph type=\"subTitle\" idx=\"1\"/>" else "<p:ph type=\"body\" idx=\"1\"/>",
+                    bullets = slide.bullets && !section
+                )
+            )
+        }
+        val footerSize = 12
+        if (deck.footer.isNotBlank()) {
+            shapes.append(
+                textShape(
+                    id = id++, name = "Pied de page", text = deck.footer,
+                    x = margin, y = SLIDE_HEIGHT - 571500, cx = width * 2 / 3, cy = 365760,
+                    size = footerSize, bold = false, color = slide.textColor, align = 0, font = slide.fontName,
+                    placeholder = "<p:ph type=\"ftr\" sz=\"quarter\" idx=\"11\"/>"
+                )
+            )
+        }
+        if (deck.slideNumbers) {
+            shapes.append(
+                textShape(
+                    id = id, name = "Numéro de diapositive", text = number.toString(),
+                    x = SLIDE_WIDTH - margin - 1371600, y = SLIDE_HEIGHT - 571500, cx = 1371600, cy = 365760,
+                    size = footerSize, bold = false, color = slide.textColor, align = 2, font = slide.fontName,
+                    placeholder = "<p:ph type=\"sldNum\" sz=\"quarter\" idx=\"12\"/>"
                 )
             )
         }
@@ -228,7 +276,9 @@ object Pptx {
         bold: Boolean,
         color: Long,
         align: Int,
-        font: String
+        font: String,
+        placeholder: String,
+        bullets: Boolean = false
     ): String {
         val algn = when (align) {
             0 -> "l"
@@ -241,21 +291,27 @@ object Pptx {
             (if (bold) " b=\"1\"" else "") + " dirty=\"0\">" +
             "<a:solidFill><a:srgbClr val=\"${color.toHexRgb()}\"/></a:solidFill>" +
             "<a:latin typeface=\"$typeface\"/></a:rPr>"
+        // Un corps sans puce doit le dire : sinon PowerPoint met celles du masque.
+        val bulletProperties = if (bullets) {
+            "<a:pPr marL=\"342900\" indent=\"-342900\" algn=\"$algn\"><a:buFont typeface=\"Arial\"/><a:buChar char=\"•\"/></a:pPr>"
+        } else {
+            "<a:pPr marL=\"0\" indent=\"0\" algn=\"$algn\"><a:buNone/></a:pPr>"
+        }
 
         val paragraphs = text.split("\n").joinToString("") { line ->
             if (line.isEmpty()) {
-                "<a:p><a:pPr algn=\"$algn\"/><a:endParaRPr lang=\"fr-FR\" sz=\"${size * 100}\"/></a:p>"
+                "<a:p><a:pPr marL=\"0\" indent=\"0\" algn=\"$algn\"><a:buNone/></a:pPr><a:endParaRPr lang=\"fr-FR\" sz=\"${size * 100}\"/></a:p>"
             } else {
-                "<a:p><a:pPr algn=\"$algn\"/><a:r>$runProperties" +
+                "<a:p>$bulletProperties<a:r>$runProperties" +
                     "<a:t>${xmlEscape(line)}</a:t></a:r></a:p>"
             }
         }
 
-        return "<p:sp><p:nvSpPr><p:cNvPr id=\"$id\" name=\"$name\"/>" +
-            "<p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr>" +
+        return "<p:sp><p:nvSpPr><p:cNvPr id=\"$id\" name=\"${xmlEscape(name)}\"/>" +
+            "<p:cNvSpPr><a:spLocks noGrp=\"1\"/></p:cNvSpPr><p:nvPr>$placeholder</p:nvPr></p:nvSpPr>" +
             "<p:spPr><a:xfrm><a:off x=\"$x\" y=\"$y\"/><a:ext cx=\"$cx\" cy=\"$cy\"/></a:xfrm>" +
             "<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>" +
-            "<p:txBody><a:bodyPr wrap=\"square\" anchor=\"ctr\"><a:normAutofit/></a:bodyPr>" +
+            "<p:txBody><a:bodyPr wrap=\"square\" anchor=\"${if (name.startsWith("Colonne") || name == "Contenu") "t" else "ctr"}\"><a:normAutofit/></a:bodyPr>" +
             "<a:lstStyle/>$paragraphs</p:txBody></p:sp>"
     }
 
@@ -311,14 +367,21 @@ object Pptx {
     fun read(bytes: ByteArray, title: String = "Présentation"): Deck {
         val parts = unzip(bytes)
         val order = slideOrder(parts)
+        var footer = ""
+        var numbered = false
         val slides = order.mapNotNull { path ->
             val xml = parts[path] ?: return@mapNotNull null
-            runCatching { SlideReader(parts, path).read(xml) }
+            val reader = SlideReader(parts, path)
+            runCatching { reader.read(xml) }
                 .getOrElse { SlideModel(background = 0xFFFFFFFFL, textColor = 0xFF111827L) }
                 .copy(notes = notesFor(path, parts))
+                .also {
+                    if (footer.isEmpty()) footer = reader.footerText
+                    numbered = numbered || reader.hasSlideNumber
+                }
         }
         if (slides.isEmpty()) throw FormatException("Ce .pptx ne contient aucune diapositive")
-        return Deck(title, slides)
+        return Deck(title, slides, footer = footer, slideNumbers = numbered)
     }
 
     /** Résout un chemin relatif d'une relation (`../slideLayouts/x.xml`). */
@@ -457,6 +520,10 @@ object Pptx {
             var inTable = false
         }
 
+        /** Texte du pied de page et présence d'un numéro, lus au passage. */
+        var footerText = ""
+        var hasSlideNumber = false
+
         fun read(xml: ByteArray): SlideModel {
             val background = backgroundOf(xml)
                 ?: layoutPath?.let { parts[it] }?.let { backgroundOf(it) }
@@ -533,6 +600,8 @@ object Pptx {
                 event = parser.next()
             }
 
+            shapes.firstOrNull { it.placeholder == "ftr" }?.let { footerText = it.paragraphs.joinToString(" ").trim() }
+            hasSlideNumber = shapes.any { it.placeholder == "sldNum" }
             val visible = shapes.filter { it.placeholder !in setOf("dt", "ftr", "sldNum", "hdr") }
             val withText = visible.filter { it.paragraphs.any { p -> p.isNotBlank() } }
             val titleShape = withText.firstOrNull { it.placeholder == "title" || it.placeholder == "ctrTitle" }

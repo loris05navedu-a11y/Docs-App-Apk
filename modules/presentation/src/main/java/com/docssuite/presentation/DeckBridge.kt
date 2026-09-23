@@ -5,14 +5,18 @@ import com.docssuite.core.DocType
 import com.docssuite.core.DocumentStorage
 import com.docssuite.core.fontLabelAt
 import com.docssuite.fileformats.Deck
+import com.docssuite.fileformats.SlideLayout
 import com.docssuite.fileformats.SlideModel
 
 /** Traduction entre les diapositives de l'éditeur et le modèle pivot des fichiers. */
 
+/** Réglages communs à toute la présentation. */
+internal data class DeckSettings(val footer: String = "", val slideNumbers: Boolean = false)
+
 private fun fontIndexOf(label: String): Int =
     AppFonts.indexOfFirst { it.label.equals(label, ignoreCase = true) }.takeIf { it >= 0 } ?: 0
 
-internal fun buildDeck(name: String, slides: List<Slide>): Deck = Deck(
+internal fun buildDeck(name: String, slides: List<Slide>, settings: DeckSettings = DeckSettings()): Deck = Deck(
     title = name,
     slides = slides.map { slide ->
         SlideModel(
@@ -24,10 +28,17 @@ internal fun buildDeck(name: String, slides: List<Slide>): Deck = Deck(
             contentSize = slide.contentSize,
             align = slide.align,
             fontName = fontLabelAt(slide.fontIndex),
-            notes = slide.notes
+            notes = slide.notes,
+            layout = slide.layout,
+            secondContent = slide.secondContent,
+            bullets = slide.bullets
         )
-    }
+    },
+    footer = settings.footer,
+    slideNumbers = settings.slideNumbers
 )
+
+internal fun settingsOf(deck: Deck) = DeckSettings(deck.footer, deck.slideNumbers)
 
 internal fun decodeDeckModel(deck: Deck): List<Slide> = deck.slides.map { slide ->
     Slide(
@@ -42,7 +53,10 @@ internal fun decodeDeckModel(deck: Deck): List<Slide> = deck.slides.map { slide 
         // Les fichiers PowerPoint portent des transitions bien plus variées que
         // celles de l'app : on repart du fondu plutôt que d'en inventer une.
         transition = 1,
-        notes = slide.notes
+        notes = slide.notes,
+        layout = slide.layout.coerceIn(SlideLayout.TITLE_AND_CONTENT, SlideLayout.TWO_COLUMNS),
+        secondContent = slide.secondContent,
+        bullets = slide.bullets
     )
 }
 
@@ -50,6 +64,6 @@ internal fun decodeDeckModel(deck: Deck): List<Slide> = deck.slides.map { slide 
 fun saveImportedDeck(storage: DocumentStorage, deck: Deck, name: String): String {
     val slides = decodeDeckModel(deck).ifEmpty { listOf(Slide(title = name)) }
     val id = storage.newId()
-    storage.save(id, name, DocType.DECK, encodeDeck(slides))
+    storage.save(id, name, DocType.DECK, encodeDeck(slides, settingsOf(deck)))
     return id
 }

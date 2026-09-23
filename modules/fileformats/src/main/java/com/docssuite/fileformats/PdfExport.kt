@@ -403,58 +403,79 @@ object PdfExport {
         val slides = deck.slides.ifEmpty { listOf(SlideModel(title = deck.title)) }
         slides.forEachIndexed { index, slide ->
             val page = pdf.startPage(pageInfo(pdf, SLIDE_WIDTH, SLIDE_HEIGHT, index + 1))
-            drawSlide(page.canvas, slide)
+            drawSlide(page.canvas, slide, deck, index + 1)
             pdf.finishPage(page)
         }
         return close(pdf)
     }
 
-    private fun drawSlide(canvas: Canvas, slide: SlideModel) {
+    private fun drawSlide(canvas: Canvas, slide: SlideModel, deck: Deck, number: Int) {
         canvas.drawColor(slide.background.toInt())
         val margin = 64
         val width = SLIDE_WIDTH - 2 * margin
+        val section = slide.layout == SlideLayout.SECTION
 
-        val alignment = when (slide.align) {
+        val alignment = when (if (section) 1 else slide.align) {
             0 -> Layout.Alignment.ALIGN_NORMAL
             2 -> Layout.Alignment.ALIGN_OPPOSITE
             else -> Layout.Alignment.ALIGN_CENTER
         }
         val typeface = Typeface.create(androidTypefaceName(slide.fontName), Typeface.NORMAL)
 
-        val title = if (slide.title.isBlank()) null else StaticLayout.Builder
-            .obtain(
-                slide.title, 0, slide.title.length,
-                TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-                    textSize = slide.titleSize.toFloat()
-                    color = slide.textColor.toInt()
-                    this.typeface = Typeface.create(typeface, Typeface.BOLD)
-                },
-                width
-            )
-            .setAlignment(alignment).setIncludePad(false).build()
+        fun layout(text: String, size: Int, bold: Boolean, w: Int, alpha: Int = 255): StaticLayout =
+            StaticLayout.Builder
+                .obtain(
+                    text, 0, text.length,
+                    TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                        textSize = size.toFloat()
+                        color = slide.textColor.toInt()
+                        this.alpha = alpha
+                        this.typeface = if (bold) Typeface.create(typeface, Typeface.BOLD) else typeface
+                    },
+                    w.coerceAtLeast(1)
+                )
+                .setAlignment(alignment).setLineSpacing(4f, 1f).setIncludePad(false).build()
 
-        val content = if (slide.content.isBlank()) null else StaticLayout.Builder
-            .obtain(
-                slide.content, 0, slide.content.length,
-                TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-                    textSize = slide.contentSize.toFloat()
-                    color = slide.textColor.toInt()
-                    this.typeface = typeface
-                },
-                width
-            )
-            .setAlignment(alignment).setLineSpacing(4f, 1f).setIncludePad(false).build()
+        fun body(text: String) = if (slide.bullets && !section) {
+            text.lines().joinToString("\n") { if (it.isBlank()) it else "•  $it" }
+        } else text
 
-        val gap = if (title != null && content != null) 24f else 0f
-        val total = (title?.height ?: 0) + (content?.height ?: 0) + gap
+        val title = if (slide.title.isBlank()) null else layout(slide.title, slide.titleSize, true, width)
+        val columns = when {
+            slide.layout == SlideLayout.TWO_COLUMNS -> listOf(slide.content, slide.secondContent)
+                .map { layout(body(it), slide.contentSize, false, (width - 32) / 2) }
+            slide.content.isBlank() -> emptyList()
+            else -> listOf(layout(body(slide.content), slide.contentSize, false, width))
+        }
+
+        val gap = if (title != null && columns.isNotEmpty()) 24f else 0f
+        val contentHeight = columns.maxOfOrNull { it.height } ?: 0
+        val total = (title?.height ?: 0) + contentHeight + gap
         var y = max(margin.toFloat(), (SLIDE_HEIGHT - total) / 2f)
 
         title?.let {
             canvas.save(); canvas.translate(margin.toFloat(), y); it.draw(canvas); canvas.restore()
             y += it.height + gap
         }
-        content?.let {
-            canvas.save(); canvas.translate(margin.toFloat(), y); it.draw(canvas); canvas.restore()
+        columns.forEachIndexed { i, column ->
+            val x = margin + i * ((width - 32) / 2 + 32)
+            canvas.save(); canvas.translate(x.toFloat(), y); column.draw(canvas); canvas.restore()
+        }
+
+        // Pied de page à gauche, numéro à droite, en petit et estompés.
+        val footerY = SLIDE_HEIGHT - 40f
+        if (deck.footer.isNotBlank()) {
+            val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                textSize = 14f; color = slide.textColor.toInt(); alpha = 170; this.typeface = typeface
+            }
+            canvas.drawText(deck.footer, margin.toFloat(), footerY, paint)
+        }
+        if (deck.slideNumbers) {
+            val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                textSize = 14f; color = slide.textColor.toInt(); alpha = 170; this.typeface = typeface
+                textAlign = Paint.Align.RIGHT
+            }
+            canvas.drawText(number.toString(), (SLIDE_WIDTH - margin).toFloat(), footerY, paint)
         }
     }
 

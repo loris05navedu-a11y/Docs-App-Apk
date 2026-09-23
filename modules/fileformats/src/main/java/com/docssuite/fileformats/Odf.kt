@@ -241,25 +241,42 @@ object Odf {
             pages.append(
                 "<draw:page draw:name=\"Page${index + 1}\" draw:style-name=\"dp$index\">"
             )
+            fun lines(text: String, style: String, bullets: Boolean) = text.split('\n').joinToString("") {
+                val line = if (bullets && it.isNotBlank()) "• $it" else it
+                "<text:p text:style-name=\"$style\">${odfText(line)}</text:p>"
+            }
+            val section = slide.layout == SlideLayout.SECTION
             if (slide.title.isNotBlank()) {
                 val style = textStyle("tt$index", slide.titleSize, true)
                 pages.append(
                     frame(
-                        x = "1.5cm", y = "2cm", width = "22cm", height = "3cm",
-                        paragraphs = slide.title.split('\n')
-                            .joinToString("") { "<text:p text:style-name=\"$style\">${odfText(it)}</text:p>" }
+                        x = "1.5cm", y = if (section) "5cm" else "2cm", width = "22cm", height = "3cm",
+                        paragraphs = lines(slide.title, style, false),
+                        presentationClass = "title"
                     )
                 )
             }
-            if (slide.content.isNotBlank()) {
+            if (slide.layout == SlideLayout.TWO_COLUMNS) {
+                val style = textStyle("tc$index", slide.contentSize, false)
+                pages.append(frame("1.5cm", "6cm", "10.6cm", "8cm", lines(slide.content, style, slide.bullets), "outline"))
+                pages.append(frame("12.9cm", "6cm", "10.6cm", "8cm", lines(slide.secondContent, style, slide.bullets), "outline"))
+            } else if (slide.content.isNotBlank()) {
                 val style = textStyle("tc$index", slide.contentSize, false)
                 pages.append(
                     frame(
-                        x = "1.5cm", y = "6cm", width = "22cm", height = "8cm",
-                        paragraphs = slide.content.split('\n')
-                            .joinToString("") { "<text:p text:style-name=\"$style\">${odfText(it)}</text:p>" }
+                        x = "1.5cm", y = if (section) "8.5cm" else "6cm", width = "22cm", height = if (section) "3cm" else "8cm",
+                        paragraphs = lines(slide.content, style, slide.bullets && !section),
+                        presentationClass = if (section) "subtitle" else "outline"
                     )
                 )
+            }
+            if (deck.footer.isNotBlank()) {
+                val style = textStyle("tf$index", 12, false)
+                pages.append(frame("1.5cm", "17.3cm", "15cm", "1cm", lines(deck.footer, style, false), "footer"))
+            }
+            if (deck.slideNumbers) {
+                val style = textStyle("tn$index", 12, false)
+                pages.append(frame("20cm", "17.3cm", "3.5cm", "1cm", lines("${index + 1}", style, false), "page-number"))
             }
             pages.append("</draw:page>")
         }
@@ -272,14 +289,14 @@ object Odf {
         return pack(MIME_DECK, content)
     }
 
-    private fun frame(x: String, y: String, width: String, height: String, paragraphs: String) =
-        "<draw:frame svg:x=\"$x\" svg:y=\"$y\" svg:width=\"$width\" svg:height=\"$height\">" +
+    private fun frame(x: String, y: String, width: String, height: String, paragraphs: String, presentationClass: String) =
+        "<draw:frame presentation:class=\"$presentationClass\" svg:x=\"$x\" svg:y=\"$y\" svg:width=\"$width\" svg:height=\"$height\">" +
             "<draw:text-box>$paragraphs</draw:text-box></draw:frame>"
 
     private fun namespaces() =
         "xmlns:office=\"$NS_OFFICE\" xmlns:text=\"$NS_TEXT\" xmlns:table=\"$NS_TABLE\" " +
             "xmlns:draw=\"$NS_DRAW\" xmlns:style=\"$NS_STYLE\" xmlns:fo=\"$NS_FO\" " +
-            "xmlns:svg=\"$NS_SVG\""
+            "xmlns:svg=\"$NS_SVG\" xmlns:presentation=\"urn:oasis:names:tc:opendocument:xmlns:presentation:1.0\""
 
     /**
      * ODF replie les blancs comme HTML : au-delà du premier, chaque espace
@@ -567,6 +584,9 @@ object Odf {
         var background: Long? = null
         var titleText = ""
         val bodyBlocks = ArrayList<String>()
+        val bodyClasses = ArrayList<String?>()
+        var footer = ""
+        var numbered = false
         val notes = StringBuilder()
         var frameClass: String? = null
         var inNotes = false
@@ -581,7 +601,7 @@ object Odf {
             when (event) {
                 XmlPullParser.START_TAG -> when (parser.localName) {
                     "page" -> if (parser.name.startsWith("draw")) {
-                        titleText = ""; bodyBlocks.clear(); notes.setLength(0)
+                        titleText = ""; bodyBlocks.clear(); bodyClasses.clear(); notes.setLength(0)
                         background = parser.attr("style-name")?.let { pageFills[it] }
                             ?: parser.attr("master-page-name")?.let { masterStyles[it] }?.let { pageFills[it] }
                     }
@@ -625,10 +645,17 @@ object Odf {
                     }
                     "frame", "custom-shape", "rect", "ellipse" -> if (!inNotes) {
                         val text = frameText.joinToString("\n").trim()
-                        if (text.isNotEmpty()) {
-                            if ((frameClass == "title" || frameClass == null && titleText.isEmpty() && bodyBlocks.isEmpty()) &&
-                                titleText.isEmpty()
-                            ) titleText = text else bodyBlocks.add(text)
+                        when {
+                            frameClass == "footer" -> if (footer.isEmpty()) footer = text
+                            frameClass == "page-number" -> numbered = true
+                            frameClass == "date-time" || frameClass == "header" -> Unit
+                            text.isEmpty() -> Unit
+                            (frameClass == "title" || frameClass == null && titleText.isEmpty() && bodyBlocks.isEmpty()) &&
+                                titleText.isEmpty() -> titleText = text
+                            else -> {
+                                bodyBlocks.add(text)
+                                bodyClasses.add(frameClass)
+                            }
                         }
                         frameText.clear()
                         frameClass = null
@@ -638,10 +665,23 @@ object Odf {
                         // Une diapositive sans texte (une image, un schéma) reste
                         // une diapositive : l'omettre décalait toute la présentation.
                         val bg = background ?: 0xFFFFFFFFL
+                        // Des puces écrites en toutes lettres (« • ») redeviennent
+                        // l'option « puces » ; deux blocs de plan côte à côte, deux colonnes.
+                        val lines = bodyBlocks.flatMap { it.split('\n') }.filter { it.isNotBlank() }
+                        val bullets = lines.isNotEmpty() && lines.all { it.startsWith("• ") }
+                        fun clean(text: String) = if (bullets) text.lines().joinToString("\n") { it.removePrefix("• ") } else text
+                        val twoColumns = bodyBlocks.size == 2 && bodyClasses.all { it == "outline" }
                         slides.add(
                             SlideModel(
                                 title = titleText,
-                                content = bodyBlocks.joinToString("\n"),
+                                content = if (twoColumns) clean(bodyBlocks[0]) else clean(bodyBlocks.joinToString("\n")),
+                                secondContent = if (twoColumns) clean(bodyBlocks[1]) else "",
+                                layout = when {
+                                    twoColumns -> SlideLayout.TWO_COLUMNS
+                                    bodyClasses.any { it == "subtitle" } -> SlideLayout.SECTION
+                                    else -> SlideLayout.TITLE_AND_CONTENT
+                                },
+                                bullets = bullets,
                                 background = bg,
                                 textColor = readableOn(bg),
                                 notes = notes.toString().trim()
@@ -653,7 +693,7 @@ object Odf {
             event = parser.next()
         }
         if (slides.isEmpty()) throw FormatException("Ce fichier ODF ne contient aucune diapositive")
-        return Deck(title, slides)
+        return Deck(title, slides, footer = footer, slideNumbers = numbered)
     }
 
     private fun contentOf(bytes: ByteArray): ByteArray =
