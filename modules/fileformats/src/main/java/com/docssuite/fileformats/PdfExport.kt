@@ -12,6 +12,9 @@ import android.text.TextPaint
 import android.text.style.AbsoluteSizeSpan
 import android.text.style.BackgroundColorSpan
 import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
+import android.text.style.SubscriptSpan
+import android.text.style.SuperscriptSpan
 import android.text.style.StrikethroughSpan
 import android.text.style.StyleSpan
 import android.text.style.TypefaceSpan
@@ -34,70 +37,166 @@ object PdfExport {
     private const val SLIDE_WIDTH = 960
     private const val SLIDE_HEIGHT = 540
 
-    fun fromTextDocument(document: TextDocument): ByteArray {
-        val pdf = PdfDocument()
-        val contentWidth = A4_WIDTH - 2 * MARGIN
-        var page = pdf.startPage(pageInfo(pdf, A4_WIDTH, A4_HEIGHT, 1))
+    /** Pagination d'un document texte : un curseur vertical sur la page en cours. */
+    private class Pager(val pdf: PdfDocument) {
         var pageNumber = 1
+        var page: PdfDocument.Page = pdf.startPage(pageInfo(pdf, A4_WIDTH, A4_HEIGHT, 1))
         var cursor = MARGIN.toFloat()
+        val bottom get() = (A4_HEIGHT - MARGIN).toFloat()
 
-        val paragraphs = document.paragraphs.ifEmpty { listOf(TextParagraph()) }
-        paragraphs.forEach { paragraph ->
-            val layout = layoutFor(paragraph, contentWidth)
-            val height = layout.height.toFloat()
-
-            if (cursor + height > A4_HEIGHT - MARGIN && cursor > MARGIN) {
-                pdf.finishPage(page)
-                pageNumber++
-                page = pdf.startPage(pageInfo(pdf, A4_WIDTH, A4_HEIGHT, pageNumber))
-                cursor = MARGIN.toFloat()
-            }
-
-            // Un paragraphe plus haut qu'une page se découpe ligne par ligne.
-            if (height > A4_HEIGHT - 2 * MARGIN) {
-                var line = 0
-                while (line < layout.lineCount) {
-                    val available = (A4_HEIGHT - MARGIN - cursor).toInt()
-                    var last = line
-                    while (last < layout.lineCount &&
-                        layout.getLineBottom(last) - layout.getLineTop(line) <= available
-                    ) last++
-                    if (last == line) last = line + 1
-
-                    val top = layout.getLineTop(line)
-                    val bottom = layout.getLineBottom(last - 1)
-                    page.canvas.save()
-                    page.canvas.translate(MARGIN.toFloat(), cursor - top)
-                    page.canvas.clipRect(0, top, contentWidth, bottom)
-                    layout.draw(page.canvas)
-                    page.canvas.restore()
-
-                    cursor += (bottom - top).toFloat()
-                    line = last
-                    if (line < layout.lineCount) {
-                        pdf.finishPage(page)
-                        pageNumber++
-                        page = pdf.startPage(pageInfo(pdf, A4_WIDTH, A4_HEIGHT, pageNumber))
-                        cursor = MARGIN.toFloat()
-                    }
-                }
-            } else {
-                page.canvas.save()
-                page.canvas.translate(MARGIN.toFloat(), cursor)
-                layout.draw(page.canvas)
-                page.canvas.restore()
-                cursor += height
-            }
-            cursor += 6f
+        fun newPage() {
+            pdf.finishPage(page)
+            pageNumber++
+            page = pdf.startPage(pageInfo(pdf, A4_WIDTH, A4_HEIGHT, pageNumber))
+            cursor = MARGIN.toFloat()
         }
 
-        pdf.finishPage(page)
+        /** Change de page si [height] ne tient plus, sauf en haut de page. */
+        fun ensure(height: Float) {
+            if (cursor + height > bottom && cursor > MARGIN) newPage()
+        }
+    }
+
+    fun fromTextDocument(document: TextDocument): ByteArray {
+        val pdf = PdfDocument()
+        val pager = Pager(pdf)
+        val contentWidth = A4_WIDTH - 2 * MARGIN
+        val spacing = document.lineSpacing / 100f
+
+        document.blocks.ifEmpty { listOf(TextParagraph()) }.forEach { block ->
+            when (block) {
+                is TextParagraph -> drawParagraph(pager, block, contentWidth, spacing)
+                is TextTable -> drawTable(pager, block.normalized(), contentWidth, spacing)
+            }
+        }
+
+        pdf.finishPage(pager.page)
         return close(pdf)
     }
 
-    private fun layoutFor(paragraph: TextParagraph, width: Int): StaticLayout {
+    private fun drawParagraph(pager: Pager, paragraph: TextParagraph, contentWidth: Int, spacing: Float) {
+        val indent = (paragraph.indent * 36).coerceAtMost(contentWidth / 2)
+        val width = contentWidth - indent
+        val layout = layoutFor(paragraph, width, spacing)
+        val height = layout.height.toFloat()
+        if (paragraph.heading > 0) pager.cursor += 6f
+        pager.ensure(height)
+
+        // Un paragraphe plus haut qu'une page se découpe ligne par ligne.
+        if (height > A4_HEIGHT - 2 * MARGIN) {
+            var line = 0
+            while (line < layout.lineCount) {
+                val available = (pager.bottom - pager.cursor).toInt()
+                var last = line
+                while (last < layout.lineCount &&
+                    layout.getLineBottom(last) - layout.getLineTop(line) <= available
+                ) last++
+                if (last == line) last = line + 1
+
+                val top = layout.getLineTop(line)
+                val bottom = layout.getLineBottom(last - 1)
+                val canvas = pager.page.canvas
+                canvas.save()
+                canvas.translate((MARGIN + indent).toFloat(), pager.cursor - top)
+                canvas.clipRect(0, top, width, bottom)
+                layout.draw(canvas)
+                canvas.restore()
+
+                pager.cursor += (bottom - top).toFloat()
+                line = last
+                if (line < layout.lineCount) pager.newPage()
+            }
+        } else {
+            val canvas = pager.page.canvas
+            canvas.save()
+            canvas.translate((MARGIN + indent).toFloat(), pager.cursor)
+            layout.draw(canvas)
+            canvas.restore()
+            pager.cursor += height
+        }
+        pager.cursor += 6f
+    }
+
+    /**
+     * Un tableau se dessine ligne par ligne ; une ligne ne se coupe pas entre
+     * deux pages, et l'en-tête se répète en haut de chaque nouvelle page.
+     */
+    private fun drawTable(pager: Pager, table: TextTable, contentWidth: Int, spacing: Float) {
+        val columns = table.columnCount.coerceAtLeast(1)
+        val columnWidth = contentWidth.toFloat() / columns
+        val padding = 4f
+        val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 0.6f
+            color = Color.rgb(0xA0, 0xA7, 0xB4)
+        }
+        val fill = Paint().apply { style = Paint.Style.FILL }
+
+        class CellLayout(val cell: TableCell, val x: Float, val width: Float, val layouts: List<StaticLayout>) {
+            val height = layouts.sumOf { it.height } + padding * 2
+        }
+
+        fun layoutRow(row: TableRow): List<CellLayout> {
+            var x = 0f
+            return row.cells.map { cell ->
+                val width = columnWidth * cell.colSpan
+                val inner = (width - padding * 2).toInt().coerceAtLeast(8)
+                val layouts = if (cell.mergedAbove) emptyList()
+                else cell.paragraphs.map { layoutFor(it, inner, spacing) }
+                CellLayout(cell, x, width, layouts).also { x += width }
+            }
+        }
+
+        fun drawRow(cells: List<CellLayout>, height: Float) {
+            val canvas = pager.page.canvas
+            val top = pager.cursor
+            cells.forEach { cell ->
+                val left = MARGIN + cell.x
+                if (cell.cell.fill != 0L) {
+                    fill.color = cell.cell.fill.toInt()
+                    canvas.drawRect(left, top, left + cell.width, top + height, fill)
+                }
+                // Une cellule prolongée par fusion ne trace pas sa bordure du haut.
+                if (!cell.cell.mergedAbove) canvas.drawLine(left, top, left + cell.width, top, border)
+                canvas.drawLine(left, top, left, top + height, border)
+                canvas.drawLine(left + cell.width, top, left + cell.width, top + height, border)
+                var y = top + padding
+                cell.layouts.forEach { layout ->
+                    canvas.save()
+                    canvas.translate(left + padding, y)
+                    layout.draw(canvas)
+                    canvas.restore()
+                    y += layout.height
+                }
+            }
+            pager.cursor += height
+        }
+
+        fun closeBottom() {
+            pager.page.canvas.drawLine(
+                MARGIN.toFloat(), pager.cursor, MARGIN + columnWidth * columns, pager.cursor, border
+            )
+        }
+
+        val header = if (table.headerRow) table.rows.firstOrNull()?.let { layoutRow(it) } else null
+        val headerHeight = header?.maxOf { it.height } ?: 0f
+        table.rows.forEachIndexed { index, row ->
+            val cells = layoutRow(row)
+            val height = cells.maxOf { it.height }.coerceAtMost((A4_HEIGHT - 2 * MARGIN).toFloat() - headerHeight)
+            if (pager.cursor + height > pager.bottom && pager.cursor > MARGIN) {
+                closeBottom()
+                pager.newPage()
+                if (header != null && index > 0) drawRow(header, headerHeight)
+            }
+            drawRow(cells, height)
+        }
+        closeBottom()
+        pager.cursor += 10f
+    }
+
+    private fun layoutFor(paragraph: TextParagraph, width: Int, spacing: Float = 1f): StaticLayout {
         val builder = SpannableStringBuilder()
-        var defaultSize = 16
+        var defaultSize = 12
         paragraph.runs.forEach { run ->
             val start = builder.length
             builder.append(run.text)
@@ -120,6 +219,9 @@ object PdfExport {
             if (run.highlight != 0L) {
                 builder.setSpan(BackgroundColorSpan(run.highlight.toInt()), start, end, flag)
             }
+            if (run.baseline == 1) builder.setSpan(SuperscriptSpan(), start, end, flag)
+            if (run.baseline == -1) builder.setSpan(SubscriptSpan(), start, end, flag)
+            if (run.baseline != 0) builder.setSpan(RelativeSizeSpan(0.7f), start, end, flag)
         }
 
         val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -131,12 +233,15 @@ object PdfExport {
             2 -> Layout.Alignment.ALIGN_OPPOSITE
             else -> Layout.Alignment.ALIGN_NORMAL
         }
-        return StaticLayout.Builder
+        val builderLayout = StaticLayout.Builder
             .obtain(builder, 0, builder.length, paint, width.coerceAtLeast(1))
             .setAlignment(alignment)
-            .setLineSpacing(2f, 1f)
+            .setLineSpacing(2f, spacing)
             .setIncludePad(false)
-            .build()
+        if (paragraph.align == 3 && android.os.Build.VERSION.SDK_INT >= 26) {
+            builderLayout.setJustificationMode(Layout.JUSTIFICATION_MODE_INTER_WORD)
+        }
+        return builderLayout.build()
     }
 
     private fun androidTypefaceName(appLabel: String) = when (appLabel) {

@@ -44,9 +44,12 @@ enum class FileFormat(
                     "htm" -> HTML
                     "markdown" -> MD
                     "tsv", "text" -> if (clean == "tsv") CSV else TXT
-                    "docm", "dotx" -> DOCX
-                    "xlsm", "xltx" -> XLSX
-                    "pptm", "potx" -> PPTX
+                    "docm", "dotx", "dotm" -> DOCX
+                    "xlsm", "xltx", "xltm" -> XLSX
+                    "pptm", "potx", "ppsx" -> PPTX
+                    "ott" -> ODT
+                    "ots" -> ODS
+                    "otp" -> ODP
                     else -> null
                 }
         }
@@ -108,19 +111,23 @@ object FileFormats {
         (bytes[2].toInt() == 3 || bytes[2].toInt() == 5 || bytes[2].toInt() == 7)
 
     private fun detectZip(bytes: ByteArray): FileFormat? {
-        val parts = runCatching { unzip(bytes) }.getOrNull() ?: return null
-        parts["mimetype"]?.toString(Charsets.UTF_8)?.trim()?.let { mime ->
+        // On ne décompresse que `mimetype` : la liste des noms suffit au reste.
+        val names = runCatching { zipEntryNames(bytes) }.getOrNull() ?: return null
+        if ("mimetype" in names) {
+            val mime = runCatching {
+                unzip(bytes, keep = { it == "mimetype" })["mimetype"]
+                    ?.toString(Charsets.UTF_8)?.trim()
+            }.getOrNull()
             when (mime) {
-                Odf.MIME_TEXT -> return FileFormat.ODT
-                Odf.MIME_SHEET -> return FileFormat.ODS
-                Odf.MIME_DECK -> return FileFormat.ODP
-                else -> Unit
+                Odf.MIME_TEXT, "application/vnd.oasis.opendocument.text-template" -> return FileFormat.ODT
+                Odf.MIME_SHEET, "application/vnd.oasis.opendocument.spreadsheet-template" -> return FileFormat.ODS
+                Odf.MIME_DECK, "application/vnd.oasis.opendocument.presentation-template" -> return FileFormat.ODP
             }
         }
         return when {
-            parts.keys.any { it.startsWith("word/") } -> FileFormat.DOCX
-            parts.keys.any { it.startsWith("xl/") } -> FileFormat.XLSX
-            parts.keys.any { it.startsWith("ppt/") } -> FileFormat.PPTX
+            names.any { it.startsWith("word/") } -> FileFormat.DOCX
+            names.any { it.startsWith("xl/") } -> FileFormat.XLSX
+            names.any { it.startsWith("ppt/") } -> FileFormat.PPTX
             else -> null
         }
     }
@@ -139,19 +146,20 @@ object FileFormats {
         val format = detect(fileName, bytes)
             ?: throw FormatException("Format de fichier non reconnu")
         val name = fileName?.substringBeforeLast('.')?.takeIf { it.isNotBlank() } ?: "Import"
-        val text = { bytes.toString(Charsets.UTF_8) }
+        // Un fichier texte venu de Windows est souvent en cp1252 ou en UTF-16.
+        val text = { decodeText(bytes) }
 
         return when (format) {
             FileFormat.DOCX -> Imported.AsText(Docx.read(bytes, name), name)
             FileFormat.DOC -> Imported.AsText(DocLegacy.read(bytes, name), name)
             FileFormat.ODT -> Imported.AsText(Odf.readText(bytes, name), name)
             FileFormat.RTF -> Imported.AsText(Rtf.read(text(), name), name)
-            FileFormat.HTML -> Imported.AsText(Html.read(text(), name), name)
+            FileFormat.HTML -> Imported.AsText(Html.read(bytes, name), name)
             FileFormat.MD -> Imported.AsText(Markdown.read(text(), name), name)
             FileFormat.TXT -> Imported.AsText(
                 TextDocument(
                     name,
-                    text().split('\n').map { TextParagraph(listOf(TextRun(it.trimEnd('\r')))) }
+                    text().removePrefix("\uFEFF").split('\n').map { TextParagraph(listOf(TextRun(it.trimEnd('\r')))) }
                 ),
                 name
             )

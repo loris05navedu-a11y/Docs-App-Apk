@@ -17,7 +17,7 @@ class RoundTripTest {
 
     private val document = TextDocument(
         title = "Rapport",
-        paragraphs = listOf(
+        blocks = listOf(
             TextParagraph(
                 listOf(
                     TextRun("Titre ", bold = true, size = 24, color = 0xFF1D4ED8L),
@@ -461,7 +461,7 @@ class RoundTripTest {
         assertEquals("a\tb\n", xmlEscape("a\tb\n"))
     }
 
-    private companion object {
+    internal companion object {
         const val NATIVE_PDF_MESSAGE =
             "android.graphics.pdf.PdfDocument s'appuie sur du code natif absent de la JVM de test"
 

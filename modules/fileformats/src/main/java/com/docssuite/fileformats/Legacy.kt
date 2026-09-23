@@ -19,6 +19,24 @@ private fun cp1252Char(byte: Int): Char =
 
 object DocLegacy {
 
+    /** Marque de fin de ligne de tableau, distincte de la marque de fin de cellule. */
+    private const val ROW_END = '\uE000'
+
+    /** Fin de paragraphe à l'intérieur d'une cellule. */
+    private const val CELL_BREAK = '\uE001'
+
+    /** Définition d'une ligne : bords droits des cellules et fusions. */
+    private class RowShape(val rightEdges: List<Int>, val vertical: List<Int>, val horizontal: List<Int>)
+
+    /** Plages du flux WordDocument : fins de ligne, et paragraphes situés dans un tableau. */
+    private class TableMarks(
+        val rowEnds: List<Pair<IntRange, RowShape?>>,
+        val inTable: List<IntRange>
+    ) {
+        /** Formes des lignes, dans l'ordre où leurs fins apparaissent dans le texte. */
+        val emitted = ArrayList<RowShape?>()
+    }
+
     fun read(bytes: ByteArray, title: String = "Document"): TextDocument {
         val cfb = Cfb.open(bytes)
         val word = cfb.firstStream("WordDocument")
@@ -30,24 +48,252 @@ object DocLegacy {
         val table = cfb.firstStream(if (useTable1) "1Table" else "0Table")
             ?: cfb.firstStream("1Table", "0Table")
 
+        // Seul le corps du document nous intéresse : notes, en-têtes et
+        // commentaires suivent dans le même flux de texte.
+        val mainLength = if (word.size > 0x50) word.i32le(0x4C).takeIf { it > 0 } else null
+        val marks = table?.let { runCatching { tableMarks(word, it) }.getOrNull() }
+
         val text = if (table != null) {
-            extractWithPieceTable(word, table) ?: extractRaw(word)
+            extractWithPieceTable(word, table, mainLength, marks) ?: extractRaw(word)
         } else {
             extractRaw(word)
         }
+        return TextDocument(title, toBlocks(removeFieldCodes(text), marks))
+    }
 
-        val paragraphs = text
-            .replace("\r\n", "\n").replace('\r', '\n').replace('\u000B', '\n')
-            .split('\n')
-            .map { line -> TextParagraph(listOf(TextRun(cleanup(line)))) }
-        return TextDocument(title, paragraphs.ifEmpty { listOf(TextParagraph()) })
+    /**
+     * Découpe le texte en paragraphes et tableaux. Dans un .doc, une cellule
+     * se termine par le caractère 7 ; la ligne aussi, par un 7 supplémentaire
+     * qu'on reconnaît à sa propriété de paragraphe (voir [tableMarks]).
+     */
+    private fun toBlocks(text: String, marks: TableMarks?): List<DocBlock> {
+        val precise = marks != null
+        val builder = BlockBuilder()
+        val line = StringBuilder()
+        val cell = ArrayList<TextParagraph>()
+        val rowCells = ArrayList<List<TextParagraph>>()
+        val rows = ArrayList<GridRow>()
+        var shapeIndex = 0
+        var previousWasCellEnd = false
+
+        // Word 97 écrivait en 12 points par défaut.
+        fun paragraph() = TextParagraph(listOf(TextRun(cleanup(line.toString()), size = 12)))
+
+        fun endRow(shape: RowShape?) {
+            if (rowCells.isEmpty()) return
+            // Ancienne fusion horizontale : la cellule marquée rejoint la précédente.
+            val cells = ArrayList<List<TextParagraph>>()
+            val edges = ArrayList<Int>()
+            val vertical = ArrayList<Int>()
+            rowCells.forEachIndexed { i, content ->
+                val merged = shape?.horizontal?.getOrNull(i) == 2 && cells.isNotEmpty()
+                val edge = shape?.rightEdges?.getOrNull(i)
+                if (merged) {
+                    if (edge != null && edges.isNotEmpty()) edges[edges.size - 1] = edge
+                } else {
+                    cells.add(content)
+                    edge?.let { edges.add(it) }
+                    vertical.add(shape?.vertical?.getOrNull(i) ?: 0)
+                }
+            }
+            rows.add(
+                GridRow(
+                    cells = cells,
+                    rightEdges = if (edges.size == cells.size) edges else emptyList(),
+                    vertical = vertical
+                )
+            )
+            rowCells.clear()
+        }
+
+        fun flushTable() {
+            if (rowCells.isNotEmpty()) endRow(null)
+            if (rows.isEmpty()) return
+            builder.gridTable(rows.toList())
+            rows.clear()
+        }
+
+        for (ch in text) {
+            when (ch) {
+                '\r', '\u000C' -> {
+                    flushTable()
+                    builder.paragraph(paragraph())
+                    line.setLength(0)
+                    previousWasCellEnd = false
+                }
+                CELL_BREAK -> {
+                    cell.add(paragraph())
+                    line.setLength(0)
+                }
+                '\u0007' -> {
+                    // Sans les propriétés de paragraphe, deux 7 d'affilée
+                    // signalent une fin de ligne.
+                    if (!precise && previousWasCellEnd && line.isEmpty() && cell.isEmpty()) {
+                        endRow(null)
+                        previousWasCellEnd = false
+                    } else {
+                        cell.add(paragraph())
+                        rowCells.add(cell.toList())
+                        cell.clear()
+                        line.setLength(0)
+                        previousWasCellEnd = true
+                    }
+                }
+                ROW_END -> {
+                    endRow(marks?.emitted?.getOrNull(shapeIndex++))
+                    line.setLength(0)
+                    cell.clear()
+                    previousWasCellEnd = false
+                }
+                else -> line.append(ch)
+            }
+        }
+        flushTable()
+        if (line.isNotEmpty()) builder.paragraph(paragraph())
+        return builder.build().ifEmpty { listOf(TextParagraph()) }
+    }
+
+    /**
+     * Les champs (numéro de page, lien, table des matières…) s'écrivent
+     * `0x13 instruction 0x14 résultat 0x15`. Seul le résultat s'affiche ;
+     * l'instruction — « HYPERLINK "http://…" » — n'est pas du texte.
+     */
+    private fun removeFieldCodes(text: String): String {
+        val out = StringBuilder(text.length)
+        // Pour chaque champ ouvert : vrai tant qu'on est dans son instruction.
+        val fields = ArrayList<Boolean>()
+        for (ch in text) {
+            when (ch) {
+                '\u0013' -> fields.add(true)
+                '\u0014' -> if (fields.isNotEmpty()) fields[fields.size - 1] = false
+                '\u0015' -> fields.removeLastOrNull()
+                else -> if (fields.none { it }) out.append(ch)
+            }
+        }
+        return out.toString()
+    }
+
+    /**
+     * Positions (dans le flux WordDocument) des marques de fin de ligne de
+     * tableau. Les propriétés de paragraphe sont rangées par pages de 512
+     * octets (FKP) ; un paragraphe dont les propriétés contiennent
+     * `sprmPFTtp` est une fin de ligne.
+     */
+    private fun tableMarks(word: ByteArray, table: ByteArray): TableMarks? {
+        val fcPlcfBtePapx = word.i32le(0x0102)
+        val lcbPlcfBtePapx = word.i32le(0x0106)
+        if (fcPlcfBtePapx < 0 || lcbPlcfBtePapx < 12 || fcPlcfBtePapx + lcbPlcfBtePapx > table.size) return null
+        val count = (lcbPlcfBtePapx - 4) / 8
+        val ranges = ArrayList<Pair<IntRange, RowShape?>>()
+        val inTable = ArrayList<IntRange>()
+        for (i in 0 until count) {
+            val pageNumber = table.i32le(fcPlcfBtePapx + (count + 1) * 4 + i * 4) and 0x3FFFFF
+            val page = pageNumber * 512
+            if (page < 0 || page + 512 > word.size) continue
+            val runs = word.u8(page + 511)
+            for (run in 0 until runs) {
+                val fcStart = word.i32le(page + run * 4)
+                val fcEnd = word.i32le(page + (run + 1) * 4)
+                val bxOffset = page + (runs + 1) * 4 + run * 13
+                val papxOffset = word.u8(bxOffset) * 2
+                if (papxOffset == 0) continue
+                val at = page + papxOffset
+                var size = word.u8(at)
+                var grpprl = at + 1
+                size = if (size == 0) {
+                    grpprl = at + 2
+                    word.u8(at + 1) * 2
+                } else size * 2 - 1
+                // Les deux premiers octets sont l'identifiant du style.
+                val flags = paragraphFlags(word, grpprl + 2, grpprl + size)
+                if (flags.ttp) ranges.add((fcStart until fcEnd) to flags.shape)
+                if (flags.inTable) inTable.add(fcStart until fcEnd)
+            }
+        }
+        return TableMarks(ranges, inTable)
+    }
+
+    private class Flags(val ttp: Boolean, val inTable: Boolean, val shape: RowShape?)
+
+    /**
+     * « Fin de ligne de tableau », « dans un tableau », et, pour une fin de
+     * ligne, la forme de la ligne lue dans `sprmTDefTable`.
+     */
+    private fun paragraphFlags(bytes: ByteArray, from: Int, to: Int): Flags {
+        var offset = from
+        val end = minOf(to, bytes.size)
+        var ttp = false
+        var inTable = false
+        var shape: RowShape? = null
+        while (offset + 2 <= end) {
+            val sprm = bytes.u16le(offset)
+            offset += 2
+            val operandSize = when ((sprm shr 13) and 7) {
+                0, 1 -> 1
+                2, 4, 5 -> 2
+                3 -> 4
+                7 -> 3
+                else -> {
+                    // Taille variable : l'octet suivant la donne (deux octets
+                    // pour sprmTDefTable).
+                    if (sprm == 0xD608 || sprm == 0xD606) {
+                        if (offset + 2 > end) break
+                        bytes.u16le(offset) + 1
+                    } else {
+                        if (offset >= end) break
+                        bytes.u8(offset) + 1
+                    }
+                }
+            }
+            if (offset < end) {
+                val on = bytes.u8(offset) != 0
+                when (sprm) {
+                    0x2417 -> ttp = ttp || on        // sprmPFTtp : fin de ligne
+                    0x2416 -> inTable = inTable || on // sprmPFInTable
+                    0xD608 -> shape = runCatching { rowShape(bytes, offset + 2, minOf(offset + operandSize, end)) }.getOrNull()
+                }
+            }
+            offset += operandSize
+        }
+        return Flags(ttp, inTable, shape)
+    }
+
+    /**
+     * `sprmTDefTable` : nombre de cellules, positions de leurs bords (en
+     * twips), puis un descripteur de 20 octets par cellule dont les drapeaux
+     * disent les fusions.
+     */
+    private fun rowShape(bytes: ByteArray, from: Int, to: Int): RowShape? {
+        if (from >= to) return null
+        val count = bytes.u8(from)
+        if (count <= 0 || count > 63) return null
+        val centers = (0..count).map { i ->
+            val at = from + 1 + i * 2
+            if (at + 2 > to) return null
+            bytes.u16le(at).toShort().toInt()
+        }
+        val descriptors = from + 1 + (count + 1) * 2
+        val vertical = ArrayList<Int>()
+        val horizontal = ArrayList<Int>()
+        for (i in 0 until count) {
+            val at = descriptors + i * 20
+            val flags = if (at + 2 <= to) bytes.u16le(at) else 0
+            horizontal.add(if (flags and 0x0002 != 0) 2 else 0)
+            vertical.add(if (flags and 0x0020 != 0 && flags and 0x0040 == 0) 2 else 0)
+        }
+        return RowShape(centers.drop(1).map { it - centers[0] }, vertical, horizontal)
     }
 
     /**
      * Le texte d'un .doc n'est pas contigu : une « table de morceaux » (piece
      * table) indique où lire chaque tronçon et dans quel encodage.
      */
-    private fun extractWithPieceTable(word: ByteArray, table: ByteArray): String? {
+    private fun extractWithPieceTable(
+        word: ByteArray,
+        table: ByteArray,
+        mainLength: Int?,
+        marks: TableMarks?
+    ): String? {
         val fcClx = word.i32le(0x01A2)
         val lcbClx = word.i32le(0x01A6)
         if (fcClx < 0 || lcbClx <= 0 || fcClx + lcbClx > table.size) return null
@@ -65,7 +311,7 @@ object DocLegacy {
                     val size = table.i32le(offset + 1)
                     val start = offset + 5
                     if (size <= 0 || start + size > table.size) return null
-                    return readPieces(word, table, start, size)
+                    return readPieces(word, table, start, size, mainLength, marks)
                 }
                 else -> return null
             }
@@ -73,14 +319,23 @@ object DocLegacy {
         return null
     }
 
-    private fun readPieces(word: ByteArray, table: ByteArray, start: Int, size: Int): String? {
+    private fun readPieces(
+        word: ByteArray,
+        table: ByteArray,
+        start: Int,
+        size: Int,
+        mainLength: Int?,
+        marks: TableMarks?
+    ): String? {
         // PlcPcd : (n+1) positions de caractères sur 4 octets, puis n descripteurs de 8.
         val count = (size - 4) / 12
         if (count <= 0) return null
+        val limit = mainLength ?: Int.MAX_VALUE
         val sb = StringBuilder()
         for (i in 0 until count) {
             val cpStart = table.i32le(start + i * 4)
-            val cpEnd = table.i32le(start + (i + 1) * 4)
+            if (cpStart >= limit) break
+            val cpEnd = minOf(table.i32le(start + (i + 1) * 4), limit)
             val length = cpEnd - cpStart
             if (length <= 0) continue
 
@@ -92,12 +347,29 @@ object DocLegacy {
             val position = if (compressed) (fc and 0x3FFFFFFF) / 2 else fc
             if (position < 0) continue
 
-            if (compressed) {
+            val piece = if (compressed) {
                 if (position + length > word.size) continue
-                sb.append(String(word, position, length, CP1252))
+                String(word, position, length, CP1252)
             } else {
                 if (position + length * 2 > word.size) continue
-                sb.append(String(word, position, length * 2, Charsets.UTF_16LE))
+                String(word, position, length * 2, Charsets.UTF_16LE)
+            }
+            if (marks == null || marks.inTable.isEmpty()) {
+                sb.append(piece)
+            } else {
+                piece.forEachIndexed { index, ch ->
+                    val charFc = position + if (compressed) index else index * 2
+                    sb.append(
+                        when {
+                            ch == '\u0007' && marks.rowEnds.any { charFc in it.first } -> {
+                                marks.emitted.add(marks.rowEnds.first { charFc in it.first }.second)
+                                ROW_END
+                            }
+                            ch == '\r' && marks.inTable.any { charFc in it } -> CELL_BREAK
+                            else -> ch
+                        }
+                    )
+                }
             }
         }
         return sb.toString().ifEmpty { null }
@@ -116,8 +388,9 @@ object DocLegacy {
     private fun cleanup(text: String): String = buildString {
         for (ch in text) {
             when {
-                ch == '\u0007' || ch == '\u0001' || ch == '\u0002' -> Unit
-                ch == '\u0013' || ch == '\u0014' || ch == '\u0015' -> Unit
+                ch == '\u000B' -> append('\n')
+                ch == '\u001E' -> append('-')
+                ch == '\u0001' || ch == '\u0002' || ch == '\u0005' || ch == '\u0008' || ch == '\u001F' -> Unit
                 ch == '\t' -> append('\t')
                 ch.code >= 0x20 -> append(ch)
             }

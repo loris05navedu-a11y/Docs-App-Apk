@@ -94,15 +94,25 @@ object Rtf {
     fun write(document: TextDocument): String {
         val sb = StringBuilder("{\\rtf1\\ansi\\ansicpg1252\\deff0\n")
 
+        val allParagraphs = document.blocks.flatMap { block ->
+            when (block) {
+                is TextParagraph -> listOf(block)
+                is TextTable -> block.rows.flatMap { row -> row.cells.flatMap { it.paragraphs } }
+            }
+        }
         val fonts = LinkedHashMap<String, Int>()
         val colors = LinkedHashMap<Long, Int>()
-        document.paragraphs.forEach { paragraph ->
+        allParagraphs.forEach { paragraph ->
             paragraph.runs.forEach { run ->
                 fonts.getOrPut(officeFontName(run.fontName)) { fonts.size }
                 colors.getOrPut(run.color) { colors.size + 1 }
                 if (run.highlight != 0L) colors.getOrPut(run.highlight) { colors.size + 1 }
             }
         }
+        document.blocks.filterIsInstance<TextTable>().forEach { table ->
+            table.rows.forEach { row -> row.cells.forEach { if (it.fill != 0L) colors.getOrPut(it.fill) { colors.size + 1 } } }
+        }
+        colors.getOrPut(0xFFA0A7B4L) { colors.size + 1 }
         if (fonts.isEmpty()) fonts["Calibri"] = 0
 
         sb.append("{\\fonttbl")
@@ -114,9 +124,11 @@ object Rtf {
             sb.append("\\blue${color and 0xFF};")
         }
         sb.append("}\n")
+        sb.append("{\\stylesheet{\\s0 Normal;}{\\s1\\outlinelevel0 heading 1;}{\\s2\\outlinelevel1 heading 2;}{\\s3\\outlinelevel2 heading 3;}}\n")
 
-        document.paragraphs.forEach { paragraph ->
-            sb.append(
+        fun paragraphProps(paragraph: TextParagraph): String = buildString {
+            if (paragraph.heading in 1..3) append("\\s${paragraph.heading}\\outlinelevel${paragraph.heading - 1}")
+            append(
                 when (paragraph.align) {
                     1 -> "\\qc"
                     2 -> "\\qr"
@@ -124,6 +136,11 @@ object Rtf {
                     else -> "\\ql"
                 }
             )
+            if (paragraph.indent > 0) append("\\li${paragraph.indent * 720}")
+            if (document.lineSpacing != 100) append("\\sl${240 * document.lineSpacing / 100}\\slmult1")
+        }
+
+        fun runs(paragraph: TextParagraph) {
             paragraph.runs.forEach { run ->
                 sb.append("{")
                 sb.append("\\f${fonts[officeFontName(run.fontName)] ?: 0}")
@@ -135,12 +152,73 @@ object Rtf {
                 if (run.italic) sb.append("\\i")
                 if (run.underline) sb.append("\\ul")
                 if (run.strike) sb.append("\\strike")
+                if (run.baseline == 1) sb.append("\\super")
+                if (run.baseline == -1) sb.append("\\sub")
                 sb.append(" ").append(escape(run.text)).append("}")
             }
-            sb.append("\\par\n")
+        }
+
+        val border = colors[0xFFA0A7B4L] ?: 0
+        document.blocks.forEach { block ->
+            when (block) {
+                is TextParagraph -> {
+                    sb.append("\\pard").append(paragraphProps(block)).append(' ')
+                    runs(block)
+                    sb.append("\\par\n")
+                }
+                is TextTable -> {
+                    val table = block.normalized()
+                    val width = 9070 / table.columnCount.coerceAtLeast(1)
+                    table.rows.forEachIndexed { rowIndex, row ->
+                        sb.append("\\trowd\\trgaph108")
+                        if (rowIndex == 0 && table.headerRow) sb.append("\\trhdr")
+                        var right = 0
+                        var column = 0
+                        row.cells.forEach { cell ->
+                            val below = table.rows.getOrNull(rowIndex + 1)?.let { cellAtColumn(it, column) }
+                            repeat(cell.colSpan) { part ->
+                                if (cell.mergedAbove) sb.append("\\clvmrg")
+                                else if (below?.mergedAbove == true) sb.append("\\clvmgf")
+                                if (cell.colSpan > 1) sb.append(if (part == 0) "\\clmgf" else "\\clmrg")
+                                for (side in listOf("t", "l", "b", "r")) sb.append("\\clbrdr$side\\brdrs\\brdrw10\\brdrcf$border")
+                                if (cell.fill != 0L) sb.append("\\clcbpat${colors[cell.fill] ?: 0}")
+                                right += width
+                                sb.append("\\cellx$right")
+                            }
+                            column += cell.colSpan
+                        }
+                        sb.append('\n')
+                        row.cells.forEach { cell ->
+                            val paragraphs = if (cell.mergedAbove) listOf(TextParagraph()) else cell.paragraphs.ifEmpty { listOf(TextParagraph()) }
+                            paragraphs.forEachIndexed { index, paragraph ->
+                                sb.append("\\pard\\intbl").append(paragraphProps(paragraph)).append(' ')
+                                runs(paragraph)
+                                if (index < paragraphs.size - 1) sb.append("\\par ")
+                            }
+                            sb.append("\\cell")
+                            // Une cellule fusionnée sur plusieurs colonnes en occupe
+                            // autant dans la définition : il faut autant de \cell.
+                            repeat(cell.colSpan - 1) { sb.append("\\pard\\intbl\\cell") }
+                            sb.append('\n')
+                        }
+                        sb.append("\\row\n")
+                    }
+                    sb.append("\\pard\n")
+                }
+            }
         }
         sb.append("}")
         return sb.toString()
+    }
+
+    private fun cellAtColumn(row: TableRow, column: Int): TableCell? {
+        var position = 0
+        for (cell in row.cells) {
+            if (position == column) return cell
+            position += cell.colSpan
+            if (position > column) return null
+        }
+        return null
     }
 
     private fun escape(text: String): String = buildString {
@@ -156,82 +234,7 @@ object Rtf {
         }
     }
 
-    fun read(text: String, title: String = "Document"): TextDocument {
-        val paragraphs = ArrayList<TextParagraph>()
-        val line = StringBuilder()
-        var index = 0
-        var skipDepth = -1
-        var depth = 0
-
-        fun flush() {
-            paragraphs.add(TextParagraph(listOf(TextRun(line.toString().trim()))))
-            line.setLength(0)
-        }
-
-        while (index < text.length) {
-            when (val ch = text[index]) {
-                '{' -> {
-                    depth++; index++
-                }
-                '}' -> {
-                    depth--
-                    // On ne ressort d'un groupe ignoré qu'une fois repassé
-                    // au-dessous de sa profondeur : ses sous-groupes ne
-                    // doivent pas rouvrir la lecture du texte.
-                    if (skipDepth >= 0 && depth < skipDepth) skipDepth = -1
-                    index++
-                }
-                '\\' -> {
-                    val start = ++index
-                    while (index < text.length && text[index].isLetter()) index++
-                    val word = text.substring(start, index)
-                    val numberStart = index
-                    if (index < text.length && (text[index] == '-' || text[index].isDigit())) {
-                        index++
-                        while (index < text.length && text[index].isDigit()) index++
-                    }
-                    val argument = text.substring(numberStart, index).toIntOrNull()
-                    if (index < text.length && text[index] == ' ') index++
-
-                    when (word) {
-                        "par", "line" -> if (skipDepth < 0) flush()
-                        "tab" -> if (skipDepth < 0) line.append('\t')
-                        "u" -> if (skipDepth < 0 && argument != null) {
-                            line.append(argument.toChar())
-                            // Le caractère de repli qui suit ne doit pas être gardé.
-                            if (index < text.length && text[index] == '?') index++
-                        }
-                        // Ces groupes portent des métadonnées, pas du texte.
-                        "fonttbl", "colortbl", "stylesheet", "info", "pict", "generator" ->
-                            skipDepth = depth
-                        "'" -> Unit
-                        else -> if (word.isEmpty() && index < text.length) {
-                            if (text[index] == '\'') {
-                                val hex = text.substring(index + 1, minOf(index + 3, text.length))
-                                hex.toIntOrNull(16)?.let {
-                                    if (skipDepth < 0) line.append(cp1252Of(it))
-                                }
-                                index += 3
-                            } else {
-                                if (skipDepth < 0) line.append(text[index])
-                                index++
-                            }
-                        }
-                    }
-                }
-                '\r', '\n' -> index++
-                else -> {
-                    if (skipDepth < 0) line.append(ch)
-                    index++
-                }
-            }
-        }
-        if (line.isNotEmpty()) flush()
-        return TextDocument(title, paragraphs.ifEmpty { listOf(TextParagraph()) })
-    }
-
-    private fun cp1252Of(code: Int): Char =
-        String(byteArrayOf(code.toByte()), CP1252).firstOrNull() ?: ' '
+    fun read(text: String, title: String = "Document"): TextDocument = RtfReader(text).read(title)
 }
 
 // ---------------------------------------------------------------- HTML
@@ -239,7 +242,7 @@ object Rtf {
 object Html {
 
     fun write(document: TextDocument): String {
-        val body = document.paragraphs.joinToString("\n") { paragraph ->
+        fun paragraphHtml(paragraph: TextParagraph): String {
             val align = when (paragraph.align) {
                 1 -> "center"
                 2 -> "right"
@@ -260,19 +263,68 @@ object Html {
                     )
                     if (decorations.isNotEmpty()) add("text-decoration:${decorations.joinToString(" ")}")
                 }.joinToString(";")
-                "<span style=\"$style\">${escape(run.text).replace("\n", "<br/>")}</span>"
+                val text = escape(run.text).replace("\n", "<br/>").replace("\t", "&emsp;")
+                val span = "<span style=\"$style\">$text</span>"
+                when (run.baseline) {
+                    1 -> "<sup>$span</sup>"
+                    -1 -> "<sub>$span</sub>"
+                    else -> span
+                }
             }
-            "<p style=\"text-align:$align;margin:0 0 .6em 0\">${runs.ifEmpty { "<br/>" }}</p>"
+            val tag = if (paragraph.heading in 1..3) "h${paragraph.heading}" else "p"
+            val indent = if (paragraph.indent > 0) ";margin-left:${paragraph.indent * 2}em" else ""
+            return "<$tag style=\"text-align:$align;margin:0 0 .6em 0$indent\">${runs.ifEmpty { "<br/>" }}</$tag>"
         }
+
+        val body = document.blocks.joinToString("\n") { block ->
+            when (block) {
+                is TextParagraph -> paragraphHtml(block)
+                is TextTable -> {
+                    val table = block.normalized()
+                    val rows = table.rows.mapIndexed { rowIndex, row ->
+                        var column = 0
+                        val cells = row.cells.mapNotNull { cell ->
+                            val start = column
+                            column += cell.colSpan
+                            if (cell.mergedAbove) return@mapNotNull null
+                            val rowSpan = 1 + table.rows.drop(rowIndex + 1)
+                                .takeWhile { below -> cellStartingAt(below, start)?.mergedAbove == true }.size
+                            val tag = if (rowIndex == 0 && table.headerRow) "th" else "td"
+                            val attributes = buildString {
+                                if (cell.colSpan > 1) append(" colspan=\"${cell.colSpan}\"")
+                                if (rowSpan > 1) append(" rowspan=\"$rowSpan\"")
+                                append(" style=\"border:1px solid #a0a7b4;padding:4px 8px;vertical-align:top")
+                                if (cell.fill != 0L) append(";background:#${cell.fill.toHexRgb()}")
+                                append("\"")
+                            }
+                            "<$tag$attributes>${cell.paragraphs.joinToString("") { paragraphHtml(it) }}</$tag>"
+                        }
+                        "<tr>${cells.joinToString("")}</tr>"
+                    }
+                    "<table style=\"border-collapse:collapse;width:100%;margin:0 0 .8em 0\">${rows.joinToString("\n")}</table>"
+                }
+            }
+        }
+        val lineHeight = 1.5 * document.lineSpacing / 100
         return """
             <!DOCTYPE html>
             <html lang="fr"><head><meta charset="utf-8"/>
             <title>${escape(document.title)}</title>
-            <style>body{margin:2.5em auto;max-width:46em;padding:0 1em;line-height:1.5}</style>
+            <style>body{margin:2.5em auto;max-width:46em;padding:0 1em;line-height:$lineHeight}</style>
             </head><body>
             $body
             </body></html>
         """.trimIndent()
+    }
+
+    private fun cellStartingAt(row: TableRow, column: Int): TableCell? {
+        var position = 0
+        for (cell in row.cells) {
+            if (position == column) return cell
+            position += cell.colSpan
+            if (position > column) return null
+        }
+        return null
     }
 
     fun write(sheet: Sheet, display: (String) -> String): String {
@@ -311,23 +363,11 @@ object Html {
     private fun escape(text: String): String = text
         .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
-    /** Lecture rudimentaire : on retire le balisage en gardant les paragraphes. */
-    fun read(html: String, title: String = "Document"): TextDocument {
-        val withBreaks = html
-            .replace(Regex("(?is)<(script|style)[^>]*>.*?</\\1>"), "")
-            .replace(Regex("(?i)<br\\s*/?>"), "\n")
-            .replace(Regex("(?i)</(p|div|h[1-6]|li|tr)>"), "\n")
-            .replace(Regex("<[^>]+>"), "")
-        val text = withBreaks
-            .replace("&nbsp;", " ").replace("&amp;", "&")
-            .replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"")
-            .replace("&#39;", "'")
-        val paragraphs = text.split('\n')
-            .map { it.trim() }
-            .dropLastWhile { it.isEmpty() }
-            .map { TextParagraph(listOf(TextRun(it))) }
-        return TextDocument(title, paragraphs.ifEmpty { listOf(TextParagraph()) })
-    }
+    fun read(html: String, title: String = "Document"): TextDocument = HtmlReader(html).read(title)
+
+    /** Lecture depuis les octets : le jeu de caractères est annoncé dans la page. */
+    fun read(bytes: ByteArray, title: String = "Document"): TextDocument =
+        HtmlReader(HtmlReader.decode(bytes)).read(title)
 }
 
 // ---------------------------------------------------------------- Markdown
@@ -336,19 +376,51 @@ object Markdown {
 
     fun write(document: TextDocument): String = buildString {
         append("# ").append(document.title).append("\n\n")
-        document.paragraphs.forEach { paragraph ->
-            paragraph.runs.forEach { run ->
-                var text = run.text
-                if (text.isEmpty()) return@forEach
-                if (run.strike) text = "~~$text~~"
-                if (run.bold && run.italic) text = "***$text***"
-                else if (run.bold) text = "**$text**"
-                else if (run.italic) text = "*$text*"
-                append(text)
+        document.blocks.forEach { block ->
+            when (block) {
+                is TextParagraph -> {
+                    if (block.heading in 1..3) append("#".repeat(block.heading + 1)).append(' ')
+                    else if (block.indent > 0) append("  ".repeat(block.indent))
+                    append(inline(block))
+                    append("\n\n")
+                }
+                is TextTable -> {
+                    val table = block.normalized()
+                    val columns = table.columnCount.coerceAtLeast(1)
+                    fun rowText(row: TableRow): String {
+                        val cells = ArrayList<String>()
+                        row.cells.forEach { cell ->
+                            cells.add(
+                                if (cell.mergedAbove) ""
+                                else cell.paragraphs.joinToString("<br>") { inline(it) }.replace("|", "\\|")
+                            )
+                            repeat(cell.colSpan - 1) { cells.add("") }
+                        }
+                        return cells.joinToString(" | ", "| ", " |")
+                    }
+                    // Un tableau Markdown a toujours une ligne d'en-tête.
+                    append(rowText(table.rows.first())).append('\n')
+                    append((0 until columns).joinToString(" | ", "| ", " |") { "---" }).append('\n')
+                    table.rows.drop(1).forEach { append(rowText(it)).append('\n') }
+                    append('\n')
+                }
             }
-            append("\n\n")
         }
     }.trimEnd() + "\n"
+
+    private fun inline(paragraph: TextParagraph): String = buildString {
+        paragraph.runs.forEach { run ->
+            var text = run.text
+            if (text.isEmpty()) return@forEach
+            if (run.strike) text = "~~$text~~"
+            if (run.bold && run.italic) text = "***$text***"
+            else if (run.bold) text = "**$text**"
+            else if (run.italic) text = "*$text*"
+            if (run.baseline == 1) text = "<sup>$text</sup>"
+            if (run.baseline == -1) text = "<sub>$text</sub>"
+            append(text)
+        }
+    }
 
     fun write(sheet: Sheet, display: (String) -> String): String = buildString {
         val columns = sheet.columns
@@ -375,24 +447,59 @@ object Markdown {
     }
 
     fun read(markdown: String, title: String = "Document"): TextDocument {
-        val paragraphs = markdown.split('\n').map { line ->
-            val heading = Regex("^(#{1,6})\\s+(.*)$").find(line)
-            if (heading != null) {
-                val level = heading.groupValues[1].length
-                TextParagraph(
-                    listOf(
-                        TextRun(
-                            heading.groupValues[2],
-                            bold = true,
-                            size = (30 - level * 3).coerceAtLeast(16)
-                        )
-                    )
-                )
-            } else {
-                TextParagraph(parseInline(line))
+        val lines = markdown.replace("\r\n", "\n").split('\n')
+        val blocks = ArrayList<DocBlock>()
+        var index = 0
+        while (index < lines.size) {
+            val line = lines[index]
+            // Tableau GFM : une ligne à barres suivie d'une ligne de tirets.
+            if (line.trim().startsWith("|") && index + 1 < lines.size &&
+                Regex("^\\s*\\|?\\s*:?-{2,}:?\\s*(\\|\\s*:?-{2,}:?\\s*)*\\|?\\s*$").matches(lines[index + 1])
+            ) {
+                val rows = ArrayList<TableRow>()
+                rows.add(tableRow(line))
+                index += 2
+                while (index < lines.size && lines[index].trim().startsWith("|")) {
+                    rows.add(tableRow(lines[index])); index++
+                }
+                blocks.add(TextTable(rows, headerRow = true).normalized())
+                continue
             }
+            val heading = Regex("^(#{1,6})\\s+(.*)$").find(line)
+            val bullet = Regex("^(\\s*)[-*+]\\s+(.*)$").find(line)
+            blocks.add(
+                when {
+                    heading != null -> {
+                        val level = heading.groupValues[1].length
+                        TextParagraph(
+                            parseInline(heading.groupValues[2]).map {
+                                it.copy(bold = true, size = (30 - level * 3).coerceAtLeast(16))
+                            },
+                            heading = level.coerceAtMost(3)
+                        )
+                    }
+                    bullet != null -> TextParagraph(
+                        listOf(TextRun("• ")) + parseInline(bullet.groupValues[2]),
+                        indent = (bullet.groupValues[1].length / 2).coerceAtMost(8)
+                    )
+                    else -> TextParagraph(parseInline(line))
+                }
+            )
+            index++
         }
-        return TextDocument(title, paragraphs.ifEmpty { listOf(TextParagraph()) })
+        return TextDocument(title, blocks.ifEmpty { listOf(TextParagraph()) })
+    }
+
+    private fun tableRow(line: String): TableRow {
+        val cells = line.trim().removePrefix("|").removeSuffix("|")
+            .split(Regex("(?<!\\\\)\\|"))
+            .map { raw ->
+                TableCell(
+                    paragraphs = raw.trim().replace("\\|", "|").split(Regex("<br\\s*/?>"))
+                        .map { TextParagraph(parseInline(it.trim())) }
+                )
+            }
+        return TableRow(cells)
     }
 
     private val emphasis = Regex("\\*\\*\\*(.+?)\\*\\*\\*|\\*\\*(.+?)\\*\\*|\\*(.+?)\\*|~~(.+?)~~")

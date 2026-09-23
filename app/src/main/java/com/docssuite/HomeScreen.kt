@@ -95,17 +95,20 @@ fun HomeScreen(
 
     // Un fichier importé est d'abord converti et enregistré, puis l'éditeur
     // correspondant s'ouvre dessus — comme n'importe quel document récent.
-    fun route(imported: Imported, fileName: String) {
+    // La conversion et l'écriture se font hors du fil principal : un gros
+    // document figeait l'écran le temps de son enregistrement.
+    fun save(imported: Imported): String? = when (imported) {
+        is Imported.AsText -> saveImportedTextDocument(storage, imported.document, imported.suggestedName)
+        is Imported.AsSheet -> saveImportedWorkbook(storage, imported.workbook, imported.suggestedName)
+        is Imported.AsDeck -> saveImportedDeck(storage, imported.deck, imported.suggestedName)
+        is Imported.AsPdf -> null
+    }
+
+    fun route(imported: Imported, savedId: String?, fileName: String) {
         when (imported) {
-            is Imported.AsText -> onOpenTextEditor(
-                saveImportedTextDocument(storage, imported.document, imported.suggestedName)
-            )
-            is Imported.AsSheet -> onOpenSpreadsheet(
-                saveImportedWorkbook(storage, imported.workbook, imported.suggestedName)
-            )
-            is Imported.AsDeck -> onOpenPresentation(
-                saveImportedDeck(storage, imported.deck, imported.suggestedName)
-            )
+            is Imported.AsText -> onOpenTextEditor(savedId)
+            is Imported.AsSheet -> onOpenSpreadsheet(savedId)
+            is Imported.AsDeck -> onOpenPresentation(savedId)
             is Imported.AsPdf -> onOpenPdf(PdfPayload(fileName, imported.bytes))
         }
     }
@@ -113,10 +116,13 @@ fun HomeScreen(
     val opener = rememberFileOpener(onError = ::report) { picked ->
         scope.launch {
             withContext(Dispatchers.IO) {
-                runCatching { FileFormats.import(picked.name, picked.bytes) }
+                runCatching {
+                    val imported = FileFormats.import(picked.name, picked.bytes)
+                    imported to save(imported)
+                }
             }
-                .onSuccess { route(it, picked.name) }
-                .onFailure { report(it.message ?: "Ce fichier n'a pas pu être ouvert") }
+                .onSuccess { (imported, id) -> route(imported, id, picked.name) }
+                .onFailure { report(importError(it)) }
         }
     }
 
@@ -128,11 +134,12 @@ fun HomeScreen(
         withContext(Dispatchers.IO) {
             runCatching {
                 val picked = readFile(context, uri)
-                FileFormats.import(picked.name, picked.bytes) to picked.name
+                val imported = FileFormats.import(picked.name, picked.bytes)
+                Triple(imported, save(imported), picked.name)
             }
         }
-            .onSuccess { (imported, name) -> route(imported, name) }
-            .onFailure { report(it.message ?: "Ce fichier n'a pas pu être ouvert") }
+            .onSuccess { (imported, id, name) -> route(imported, id, name) }
+            .onFailure { report(importError(it)) }
         onIncomingHandled()
     }
 
@@ -356,4 +363,10 @@ private fun RecentRow(meta: DocMeta, onOpen: () -> Unit, onDelete: () -> Unit) {
             }
         }
     }
+}
+
+/** Message lisible pour un import raté, y compris quand la mémoire manque. */
+private fun importError(error: Throwable): String = when (error) {
+    is OutOfMemoryError -> "Ce fichier est trop lourd pour la mémoire du téléphone."
+    else -> error.message?.takeIf { it.isNotBlank() } ?: "Ce fichier n'a pas pu être ouvert"
 }

@@ -12,7 +12,8 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTask">
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -40,6 +41,16 @@
                 <data android:mimeType="text/plain" />
                 <data android:mimeType="text/markdown" />
                 <data android:mimeType="text/html" />
+                <data android:mimeType="text/rtf" />
+                <data android:mimeType="application/x-rtf" />
+                <data android:mimeType="text/tab-separated-values" />
+                <data android:mimeType="application/vnd.ms-word.document.macroEnabled.12" />
+                <data android:mimeType="application/vnd.ms-excel.sheet.macroEnabled.12" />
+                <data android:mimeType="application/vnd.ms-powerpoint.presentation.macroEnabled.12" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.presentationml.slideshow" />
+                <!-- Les messageries transmettent souvent les documents sans type
+                     précis ; le contenu est reconnu à sa signature. -->
+                <data android:mimeType="application/octet-stream" />
             </intent-filter>
 
             <!-- Recevoir un fichier partagé depuis une messagerie. -->
@@ -58,6 +69,11 @@
                 <data android:mimeType="application/vnd.oasis.opendocument.presentation" />
                 <data android:mimeType="text/csv" />
                 <data android:mimeType="text/plain" />
+                <data android:mimeType="text/markdown" />
+                <data android:mimeType="text/html" />
+                <data android:mimeType="application/rtf" />
+                <data android:mimeType="text/rtf" />
+                <data android:mimeType="application/octet-stream" />
             </intent-filter>
         </activity>
 

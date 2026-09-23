@@ -82,14 +82,40 @@ class ZipBuilder {
     }
 }
 
-/** Lit toutes les entrées d'une archive en mémoire. */
-fun unzip(bytes: ByteArray, limit: Long = 64L * 1024 * 1024): Map<String, ByteArray> {
+/**
+ * Parties utiles à la lecture : le XML et les relations. Les images, vidéos
+ * et polices embarquées d'un document peuvent peser des dizaines de mégaoctets ;
+ * les décompresser pour ne rien en faire saturait la mémoire du téléphone.
+ */
+fun isStructuralPart(name: String): Boolean {
+    val lower = name.lowercase()
+    return lower.endsWith(".xml") || lower.endsWith(".rels") || lower == "mimetype"
+}
+
+/** Noms des entrées d'une archive, sans rien décompresser de leur contenu. */
+fun zipEntryNames(bytes: ByteArray): List<String> {
+    val names = ArrayList<String>()
+    ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
+        while (true) {
+            val entry = zip.nextEntry ?: break
+            names.add(entry.name)
+        }
+    }
+    return names
+}
+
+/** Lit les entrées d'une archive en mémoire ; [keep] choisit lesquelles. */
+fun unzip(
+    bytes: ByteArray,
+    limit: Long = 64L * 1024 * 1024,
+    keep: (String) -> Boolean = ::isStructuralPart
+): Map<String, ByteArray> {
     val out = LinkedHashMap<String, ByteArray>()
     var total = 0L
     ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
         while (true) {
             val entry = zip.nextEntry ?: break
-            if (entry.isDirectory) continue
+            if (entry.isDirectory || !keep(entry.name)) continue
             val buffer = ByteArrayOutputStream()
             val chunk = ByteArray(16 * 1024)
             while (true) {
@@ -112,10 +138,22 @@ class FormatException(message: String, cause: Throwable? = null) : Exception(mes
 fun newPullParser(xml: String): XmlPullParser {
     val factory = XmlPullParserFactory.newInstance()
     factory.isNamespaceAware = false
-    return factory.newPullParser().apply { setInput(StringReader(xml)) }
+    // Une marque d'ordre d'octets devant `<?xml` fait échouer le parseur
+    // dès le premier caractère ; plusieurs producteurs en écrivent une.
+    val clean = xml.trimStart('﻿')
+    return factory.newPullParser().apply { setInput(StringReader(clean)) }
 }
 
-fun newPullParser(bytes: ByteArray): XmlPullParser = newPullParser(bytes.toString(Charsets.UTF_8))
+fun newPullParser(bytes: ByteArray): XmlPullParser = newPullParser(decodeXml(bytes))
+
+/** Le XML d'une archive est en UTF-8, parfois en UTF-16 avec son BOM. */
+private fun decodeXml(bytes: ByteArray): String = when {
+    bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte() ->
+        String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE)
+    bytes.size >= 2 && bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte() ->
+        String(bytes, 2, bytes.size - 2, Charsets.UTF_16BE)
+    else -> bytes.toString(Charsets.UTF_8)
+}
 
 fun InputStream.readAllBytesCompat(): ByteArray {
     val buffer = ByteArrayOutputStream()

@@ -312,42 +312,82 @@ object Pptx {
         val parts = unzip(bytes)
         val order = slideOrder(parts)
         val slides = order.mapNotNull { path ->
-            parts[path]?.let { parseSlide(it).copy(notes = notesFor(path, parts)) }
+            val xml = parts[path] ?: return@mapNotNull null
+            runCatching { SlideReader(parts, path).read(xml) }
+                .getOrElse { SlideModel(background = 0xFFFFFFFFL, textColor = 0xFF111827L) }
+                .copy(notes = notesFor(path, parts))
         }
         if (slides.isEmpty()) throw FormatException("Ce .pptx ne contient aucune diapositive")
         return Deck(title, slides)
     }
 
+    /** Résout un chemin relatif d'une relation (`../slideLayouts/x.xml`). */
+    private fun resolve(fromPart: String, target: String): String {
+        if (target.startsWith("/")) return target.removePrefix("/")
+        val base = fromPart.substringBeforeLast('/').split('/').toMutableList()
+        target.split('/').forEach { piece ->
+            when (piece) {
+                ".." -> if (base.isNotEmpty()) base.removeAt(base.size - 1)
+                ".", "" -> Unit
+                else -> base.add(piece)
+            }
+        }
+        return base.joinToString("/")
+    }
+
+    private fun relsOf(part: String, parts: Map<String, ByteArray>): Map<String, String> {
+        val relsPath = part.substringBeforeLast('/') + "/_rels/" + part.substringAfterLast('/') + ".rels"
+        return parseRelationships(parts[relsPath]).mapValues { resolve(part, it.value) }
+    }
+
     /**
-     * Notes attachées à une diapositive. PowerPoint range `slideN.xml` en face
-     * de `notesSlideN.xml` ; c'est aussi ce que cette classe écrit.
+     * Notes attachées à une diapositive, trouvées par ses relations (ou, à
+     * défaut, par le nom que PowerPoint leur donne). Seul l'espace réservé
+     * « corps » contient les notes : les autres portent l'image de la
+     * diapositive et son numéro.
      */
     private fun notesFor(slidePath: String, parts: Map<String, ByteArray>): String {
-        val notesPath = slidePath
-            .replace("ppt/slides/slide", "ppt/notesSlides/notesSlide")
+        val relsPath = slidePath.substringBeforeLast('/') + "/_rels/" + slidePath.substringAfterLast('/') + ".rels"
+        // Le nom ne dit rien du rattachement (python-pptx numérote les notes
+        // dans l'ordre de création) : on ne s'y fie que sans relations.
+        val notesPath = if (parts.containsKey(relsPath)) {
+            relsOf(slidePath, parts).values.firstOrNull { it.contains("notesSlide") } ?: return ""
+        } else {
+            slidePath.replace("ppt/slides/slide", "ppt/notesSlides/notesSlide")
+        }
         val xml = parts[notesPath] ?: return ""
         return runCatching {
             val paragraphs = ArrayList<String>()
             val line = StringBuilder()
             var inText = false
+            var inBody = false
+            var sawPlaceholders = false
+            var shapeIsBody = false
             val parser = newPullParser(xml)
             var event = parser.eventType
             while (event != XmlPullParser.END_DOCUMENT) {
                 when (event) {
-                    XmlPullParser.START_TAG -> if (parser.localName == "t") inText = true
+                    XmlPullParser.START_TAG -> when (parser.localName) {
+                        "sp" -> shapeIsBody = false
+                        "ph" -> {
+                            sawPlaceholders = true
+                            shapeIsBody = parser.attr("type") == "body"
+                        }
+                        "txBody" -> inBody = shapeIsBody || !sawPlaceholders
+                        "t" -> inText = inBody
+                    }
                     XmlPullParser.TEXT -> if (inText) line.append(parser.text)
                     XmlPullParser.END_TAG -> when (parser.localName) {
                         "t" -> inText = false
-                        "p" -> {
+                        "p" -> if (inBody) {
                             paragraphs.add(line.toString())
                             line.setLength(0)
                         }
+                        "txBody" -> inBody = false
                     }
                 }
                 event = parser.next()
             }
-            // Les notes portent aussi le numéro de diapositive dans un champ
-            // séparé : une ligne purement numérique n'est pas du commentaire.
             paragraphs
                 .dropLastWhile { it.isBlank() }
                 .filterNot { it.isNotEmpty() && it.all { ch -> ch.isDigit() } }
@@ -376,7 +416,7 @@ object Pptx {
             }
         }
         val ordered = ids.mapNotNull { relations[it] }
-            .map { "ppt/${it.removePrefix("/").removePrefix("ppt/")}" }
+            .map { resolve("ppt/presentation.xml", it) }
             .filter { parts.containsKey(it) }
         if (ordered.isNotEmpty()) return ordered
         return parts.keys
@@ -386,69 +426,246 @@ object Pptx {
             }
     }
 
-    private fun parseSlide(xml: ByteArray): SlideModel {
-        val blocks = ArrayList<Pair<String, Int>>() // texte, taille
-        var background: Long? = null
-        var textColor: Long? = null
+    /**
+     * Lit une diapositive. Ce qu'elle ne précise pas — le fond, la couleur du
+     * texte — vient de sa disposition, puis de son masque, puis du thème ;
+     * sans cette remontée, une présentation blanche s'ouvrait sur un fond
+     * sombre choisi par défaut.
+     */
+    private class SlideReader(val parts: Map<String, ByteArray>, val slidePath: String) {
 
-        val parser = newPullParser(xml)
-        var inBackground = false
-        var inTextBody = false
-        var inTextNode = false
-        var currentSize = 0
-        var maxSize = 0
-        val block = StringBuilder()
-        val line = StringBuilder()
+        private val layoutPath = relsOf(slidePath, parts).values.firstOrNull { it.contains("slideLayout") }
+        private val masterPath = layoutPath?.let { layout ->
+            relsOf(layout, parts).values.firstOrNull { it.contains("slideMaster") }
+        }
+        private val themePath = masterPath?.let { master ->
+            relsOf(master, parts).values.firstOrNull { it.contains("theme") }
+        }
+        private val colorMap: Map<String, String> = masterPath?.let { readColorMap(parts[it]) } ?: DEFAULT_MAP
+        private val theme: Map<String, Long> = themePath?.let { readTheme(parts[it]) } ?: emptyMap()
 
-        var event = parser.eventType
-        while (event != XmlPullParser.END_DOCUMENT) {
-            when (event) {
-                XmlPullParser.START_TAG -> when (parser.localName) {
-                    "bg", "bgPr" -> inBackground = true
-                    "srgbClr" -> {
-                        val value = hexToArgb(parser.attr("val"), 0L)
-                        if (inBackground && background == null) background = value
-                        else if (inTextBody && textColor == null) textColor = value
-                    }
-                    "txBody" -> {
-                        inTextBody = true; block.setLength(0); maxSize = 0
-                    }
-                    "rPr", "defRPr", "endParaRPr" -> {
-                        currentSize = parser.attr("sz")?.toIntOrNull()?.div(100) ?: 0
-                        if (currentSize > maxSize) maxSize = currentSize
-                    }
-                    "t" -> inTextNode = inTextBody
-                    "br" -> if (inTextBody) line.append('\n')
-                }
-                XmlPullParser.TEXT -> if (inTextNode) line.append(parser.text)
-                XmlPullParser.END_TAG -> when (parser.localName) {
-                    "t" -> inTextNode = false
-                    "p" -> if (inTextBody) {
-                        if (block.isNotEmpty()) block.append('\n')
-                        block.append(line)
-                        line.setLength(0)
-                    }
-                    "txBody" -> {
-                        val text = block.toString().trim()
-                        if (text.isNotEmpty()) blocks.add(text to maxSize)
-                        inTextBody = false
-                    }
-                    "bg", "bgPr" -> inBackground = false
-                }
-            }
-            event = parser.next()
+        private class Shape {
+            var placeholder: String? = null
+            var isPlaceholder = false
+            val paragraphs = ArrayList<String>()
+            val line = StringBuilder()
+            var size = 0
+            var color: Long? = null
+            var center = false
+            var bulletsOff = 0
+            var bulletsOn = 0
+            var inTable = false
         }
 
-        // Le bloc au plus gros corps de texte fait le titre ; le reste, le corps.
-        val titleBlock = blocks.maxByOrNull { it.second }
-        val rest = blocks.filter { it !== titleBlock }
-        return SlideModel(
-            title = titleBlock?.first.orEmpty(),
-            content = rest.joinToString("\n") { it.first },
-            background = background ?: 0xFF1E293BL,
-            textColor = textColor ?: 0xFFFFFFFFL,
-            titleSize = (titleBlock?.second ?: 32).coerceIn(10, 96),
-            contentSize = (rest.firstOrNull()?.second ?: 20).coerceIn(8, 72)
-        )
+        fun read(xml: ByteArray): SlideModel {
+            val background = backgroundOf(xml)
+                ?: layoutPath?.let { parts[it] }?.let { backgroundOf(it) }
+                ?: masterPath?.let { parts[it] }?.let { backgroundOf(it) }
+                ?: 0xFFFFFFFFL
+
+            val shapes = ArrayList<Shape>()
+            val stack = ArrayList<Shape>()
+            val parser = newPullParser(xml)
+            var inText = false
+            var inRunProps = false
+            var fieldSkip = false
+            var tableRow: ArrayList<String>? = null
+            var cellText = StringBuilder()
+
+            var event = parser.eventType
+            while (event != XmlPullParser.END_DOCUMENT) {
+                val shape = stack.lastOrNull()
+                when (event) {
+                    XmlPullParser.START_TAG -> when (parser.localName) {
+                        "sp", "graphicFrame", "cxnSp" -> stack.add(Shape())
+                        "ph" -> shape?.let {
+                            it.isPlaceholder = true
+                            it.placeholder = parser.attr("type") ?: "body"
+                        }
+                        "tbl" -> shape?.inTable = true
+                        "tr" -> tableRow = ArrayList()
+                        "tc" -> cellText = StringBuilder()
+                        "pPr" -> if (shape != null) {
+                            if (parser.attr("algn") == "ctr") shape.center = true
+                        }
+                        "buNone" -> shape?.let { it.bulletsOff++ }
+                        "buChar", "buAutoNum" -> shape?.let { it.bulletsOn++ }
+                        "rPr", "defRPr" -> if (shape != null) {
+                            parser.attr("sz")?.toIntOrNull()?.let { size ->
+                                if (size / 100 > shape.size) shape.size = size / 100
+                            }
+                            inRunProps = parser.localName == "rPr"
+                        }
+                        "solidFill" -> Unit
+                        "srgbClr", "schemeClr", "sysClr" -> if (inRunProps && shape != null && shape.color == null) {
+                            shape.color = colorOf(parser)
+                        }
+                        "fld" -> fieldSkip = parser.attr("type")?.startsWith("slidenum") == true
+                        "t" -> inText = shape != null && !fieldSkip
+                        "br" -> if (shape != null) shape.line.append('\n')
+                        // Le texte d'une zone de commentaire n'est pas projeté.
+                        "extLst" -> parser.skipSubtree()
+                    }
+                    XmlPullParser.TEXT -> if (inText && shape != null) {
+                        if (shape.inTable) cellText.append(parser.text) else shape.line.append(parser.text)
+                    }
+                    XmlPullParser.END_TAG -> when (parser.localName) {
+                        "t" -> inText = false
+                        "rPr" -> inRunProps = false
+                        "fld" -> fieldSkip = false
+                        "p" -> if (shape != null) {
+                            if (shape.inTable) {
+                                if (cellText.isNotEmpty() && !cellText.endsWith("\n")) cellText.append(' ')
+                            } else {
+                                shape.paragraphs.add(shape.line.toString())
+                                shape.line.setLength(0)
+                            }
+                        }
+                        "tc" -> tableRow?.add(cellText.toString().trim())
+                        "tr" -> {
+                            tableRow?.let { row -> shape?.paragraphs?.add(row.joinToString(" | ")) }
+                            tableRow = null
+                        }
+                        "tbl" -> shape?.inTable = false
+                        "sp", "graphicFrame", "cxnSp" -> stack.removeLastOrNull()?.let { shapes.add(it) }
+                    }
+                }
+                event = parser.next()
+            }
+
+            val visible = shapes.filter { it.placeholder !in setOf("dt", "ftr", "sldNum", "hdr") }
+            val withText = visible.filter { it.paragraphs.any { p -> p.isNotBlank() } }
+            val titleShape = withText.firstOrNull { it.placeholder == "title" || it.placeholder == "ctrTitle" }
+                ?: withText.filter { !it.isPlaceholder }.maxByOrNull { it.size }
+                    ?.takeIf { withText.none { s -> s.isPlaceholder } && it.size > 0 }
+            val bodies = withText.filter { it !== titleShape }
+
+            fun text(shape: Shape) = shape.paragraphs.dropLastWhile { it.isBlank() }.joinToString("\n").trim()
+
+            // Deux espaces réservés de corps côte à côte : la disposition
+            // « deux contenus » de PowerPoint.
+            val bodyPlaceholders = bodies.filter { it.isPlaceholder && it.placeholder in setOf("body", "obj") }
+            val twoColumns = bodyPlaceholders.size == 2 && bodies.size == 2
+            val bulletShapes = bodies.filter { shape ->
+                (shape.isPlaceholder && shape.placeholder in setOf("body", "obj") && shape.bulletsOff < shape.paragraphs.size) ||
+                    shape.bulletsOn > 0
+            }
+            val bullets = bodies.isNotEmpty() && bulletShapes.size == bodies.size &&
+                titleShape?.placeholder != "ctrTitle"
+
+            val titleColor = titleShape?.color
+            val textColor = titleColor ?: bodies.firstNotNullOfOrNull { it.color } ?: readableOn(background)
+            val isSection = titleShape?.placeholder == "ctrTitle" ||
+                (bodies.isEmpty() && titleShape != null)
+            return SlideModel(
+                title = titleShape?.let { text(it) }.orEmpty(),
+                content = if (twoColumns) text(bodies[0]) else bodies.joinToString("\n") { text(it) },
+                secondContent = if (twoColumns) text(bodies[1]) else "",
+                layout = when {
+                    twoColumns -> SlideLayout.TWO_COLUMNS
+                    isSection && titleShape?.placeholder == "ctrTitle" -> SlideLayout.SECTION
+                    else -> SlideLayout.TITLE_AND_CONTENT
+                },
+                bullets = bullets,
+                background = background,
+                textColor = textColor,
+                titleSize = (titleShape?.size?.takeIf { it > 0 } ?: 32).coerceIn(10, 96),
+                contentSize = (bodies.firstOrNull()?.size?.takeIf { it > 0 } ?: 20).coerceIn(8, 72),
+                align = if (titleShape?.center == true || titleShape?.placeholder == "ctrTitle") 1 else 0
+            )
+        }
+
+        /** Couleur unie du fond d'une partie, `null` si elle n'en déclare pas. */
+        private fun backgroundOf(xml: ByteArray): Long? = runCatching {
+            val parser = newPullParser(xml)
+            var inBackground = false
+            var event = parser.eventType
+            while (event != XmlPullParser.END_DOCUMENT) {
+                when (event) {
+                    XmlPullParser.START_TAG -> when (parser.localName) {
+                        "bg" -> inBackground = true
+                        "srgbClr", "schemeClr", "sysClr", "prstClr" -> if (inBackground) return@runCatching colorOf(parser)
+                        // Le fond vient après ; au-delà, c'est l'arbre des formes.
+                        "spTree" -> return@runCatching null
+                    }
+                    XmlPullParser.END_TAG -> if (parser.localName == "bg") return@runCatching null
+                }
+                event = parser.next()
+            }
+            null
+        }.getOrNull()
+
+        private fun colorOf(parser: XmlPullParser): Long? = when (parser.localName) {
+            "srgbClr" -> hexToArgb(parser.attr("val"), 0xFFFFFFFFL)
+            "sysClr" -> hexToArgb(parser.attr("lastClr") ?: "FFFFFF", 0xFFFFFFFFL)
+            "schemeClr" -> parser.attr("val")?.let { name ->
+                val mapped = colorMap[name] ?: name
+                theme[mapped] ?: when (mapped) {
+                    "lt1" -> 0xFFFFFFFFL
+                    "dk1" -> 0xFF000000L
+                    else -> null
+                }
+            }
+            "prstClr" -> when (parser.attr("val")) {
+                "white" -> 0xFFFFFFFFL
+                "black" -> 0xFF000000L
+                else -> null
+            }
+            else -> null
+        }
+
+        private fun readColorMap(xml: ByteArray?): Map<String, String> {
+            if (xml == null) return DEFAULT_MAP
+            return runCatching {
+                val parser = newPullParser(xml)
+                var event = parser.eventType
+                while (event != XmlPullParser.END_DOCUMENT) {
+                    if (event == XmlPullParser.START_TAG && parser.localName == "clrMap") {
+                        val map = HashMap<String, String>()
+                        for (i in 0 until parser.attributeCount) {
+                            map[parser.getAttributeName(i).substringAfter(':')] = parser.getAttributeValue(i)
+                        }
+                        return@runCatching map
+                    }
+                    event = parser.next()
+                }
+                DEFAULT_MAP
+            }.getOrDefault(DEFAULT_MAP)
+        }
+
+        private fun readTheme(xml: ByteArray?): Map<String, Long> {
+            if (xml == null) return emptyMap()
+            val out = HashMap<String, Long>()
+            runCatching {
+                val parser = newPullParser(xml)
+                var current: String? = null
+                var inScheme = false
+                var event = parser.eventType
+                while (event != XmlPullParser.END_DOCUMENT) {
+                    if (event == XmlPullParser.START_TAG) {
+                        when (val name = parser.localName) {
+                            "clrScheme" -> inScheme = true
+                            "srgbClr" -> if (inScheme && current != null) {
+                                out[current!!] = hexToArgb(parser.attr("val"), 0xFFFFFFFFL)
+                            }
+                            "sysClr" -> if (inScheme && current != null) {
+                                out[current!!] = hexToArgb(parser.attr("lastClr") ?: "FFFFFF", 0xFFFFFFFFL)
+                            }
+                            else -> if (inScheme) current = name
+                        }
+                    } else if (event == XmlPullParser.END_TAG && parser.localName == "clrScheme") {
+                        return@runCatching
+                    }
+                    event = parser.next()
+                }
+            }
+            return out
+        }
+
+        companion object {
+            val DEFAULT_MAP = mapOf(
+                "bg1" to "lt1", "tx1" to "dk1", "bg2" to "lt2", "tx2" to "dk2"
+            )
+        }
     }
 }

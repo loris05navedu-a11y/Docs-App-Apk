@@ -8,7 +8,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.ParagraphStyle
+import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextIndent
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.docssuite.core.fontFamilyAt
 import org.json.JSONArray
@@ -26,11 +30,18 @@ data class CharStyle(
     val size: Int = 16,
     val font: Int = 0,
     val color: Long = 0xFF1A1A1AL,
-    val highlight: Long = 0L
+    val highlight: Long = 0L,
+    /** 1 = exposant, -1 = indice. */
+    val baseline: Int = 0
 ) {
     fun toSpanStyle(): SpanStyle = SpanStyle(
         color = Color(color),
-        fontSize = size.sp,
+        fontSize = if (baseline != 0) (size * 0.7f).sp else size.sp,
+        baselineShift = when (baseline) {
+            1 -> BaselineShift.Superscript
+            -1 -> BaselineShift.Subscript
+            else -> null
+        },
         fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
         fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal,
         fontFamily = fontFamilyAt(font),
@@ -46,8 +57,22 @@ data class CharStyle(
     )
 }
 
-fun buildAnnotated(text: String, styles: List<CharStyle>): AnnotatedString {
-    val builder = AnnotatedString.Builder(text)
+fun buildAnnotated(
+    text: String,
+    styles: List<CharStyle>,
+    paras: List<ParaStyle> = emptyList(),
+    lineSpacing: Int = 100
+): AnnotatedString {
+    // Dans Compose, un saut de ligne à l'intérieur d'un style de paragraphe
+    // ajoute une ligne vide : c'est la limite du style qui fait le retour à la
+    // ligne. À l'affichage seulement, chaque saut interne devient donc un
+    // caractère invisible de même longueur (les positions ne bougent pas).
+    // Le dernier reste un vrai saut : c'est lui qui ouvre la ligne vide après
+    // un Entrée en fin de texte.
+    val display = CharArray(text.length) { i ->
+        if (text[i] == '\n' && i != text.length - 1) '\u200B' else text[i]
+    }
+    val builder = AnnotatedString.Builder(String(display))
     var i = 0
     while (i < text.length) {
         val style = styles.getOrElse(i) { CharStyle() }
@@ -56,13 +81,37 @@ fun buildAnnotated(text: String, styles: List<CharStyle>): AnnotatedString {
         builder.addStyle(style.toSpanStyle(), i, j)
         i = j
     }
+    // Un style par paragraphe, sur des plages qui se suivent sans se
+    // chevaucher (Compose le refuse), saut de ligne compris.
+    var start = 0
+    var index = 0
+    while (start < text.length) {
+        val newline = text.indexOf('\n', start)
+        val end = if (newline < 0) text.length else newline + 1
+        builder.addStyle(paragraphStyle(paras.getOrElse(index) { ParaStyle() }, lineSpacing), start, end)
+        start = end
+        index++
+    }
     return builder.toAnnotatedString()
 }
 
+private fun paragraphStyle(para: ParaStyle, lineSpacing: Int): ParagraphStyle {
+    val indent = (para.indent * 24).sp
+    return ParagraphStyle(
+        textAlign = alignFromInt(para.align),
+        textIndent = if (para.indent > 0) TextIndent(firstLine = indent, restLine = indent) else null,
+        lineHeight = if (lineSpacing != 100) (1.2f * lineSpacing / 100f).em else androidx.compose.ui.unit.TextUnit.Unspecified
+    )
+}
+
 /** Applique les styles au rendu du champ de saisie sans modifier les offsets. */
-data class RichTextTransformation(val styles: List<CharStyle>) : VisualTransformation {
+data class RichTextTransformation(
+    val styles: List<CharStyle>,
+    val paras: List<ParaStyle> = emptyList(),
+    val lineSpacing: Int = 100
+) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText =
-        TransformedText(buildAnnotated(text.text, styles), OffsetMapping.Identity)
+        TransformedText(buildAnnotated(text.text, styles, paras, lineSpacing), OffsetMapping.Identity)
 }
 
 /**
@@ -124,6 +173,7 @@ fun stylesToJson(text: String, styles: List<CharStyle>): String {
             put("f", style.font)
             put("c", style.color)
             put("h", style.highlight)
+            if (style.baseline != 0) put("bl", style.baseline)
         })
         i = j
     }
@@ -148,7 +198,8 @@ fun stylesFromJson(payload: String): Pair<String, List<CharStyle>> {
             size = o.optInt("sz", 16),
             font = o.optInt("f", 0),
             color = o.optLong("c", 0xFF1A1A1AL),
-            highlight = o.optLong("h", 0L)
+            highlight = o.optLong("h", 0L),
+            baseline = o.optInt("bl", 0).coerceIn(-1, 1)
         )
         repeat(o.optInt("len")) { styles.add(style) }
     }

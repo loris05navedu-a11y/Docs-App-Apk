@@ -128,10 +128,14 @@ fun rememberFileSaver(
 /** Charge le contenu d'une `content://` en mémoire, avec les mêmes garde-fous. */
 fun readFile(context: Context, uri: Uri): PickedFile {
     val resolver = context.contentResolver
-    val name = displayName(context, uri) ?: "fichier"
-    val size = resolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
-        if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else -1L
-    } ?: -1L
+    val name = withExtension(displayName(context, uri) ?: "fichier", runCatching { resolver.getType(uri) }.getOrNull())
+    // Certains fournisseurs (messageries, clouds) refusent qu'on les
+    // interroge : la taille n'est alors connue qu'à la lecture.
+    val size = runCatching {
+        resolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else -1L
+        }
+    }.getOrNull() ?: -1L
     if (size > MAX_IMPORT_BYTES) {
         throw IllegalStateException("Fichier trop volumineux (${size / (1024 * 1024)} Mo)")
     }
@@ -154,12 +158,32 @@ fun readFile(context: Context, uri: Uri): PickedFile {
 }
 
 fun displayName(context: Context, uri: Uri): String? =
-    context.contentResolver
-        .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-        ?.use { cursor ->
-            if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getString(0) else null
-        }
+    runCatching {
+        context.contentResolver
+            .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { cursor ->
+                if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getString(0) else null
+            }
+    }.getOrNull()
         ?: uri.lastPathSegment?.substringAfterLast('/')
+
+/**
+ * Un fichier reçu sans extension (fréquent depuis une messagerie) reprend
+ * celle de son type déclaré : sans elle, un simple texte ne serait pas reconnu.
+ */
+private fun withExtension(name: String, mime: String?): String {
+    if (name.substringAfterLast('.', "").length in 1..5) return name
+    val extension = mime?.let { type ->
+        FileFormat.values().firstOrNull { it.mime == type }?.extension
+            ?: when (type) {
+                "text/rtf", "application/x-rtf" -> "rtf"
+                "text/x-markdown" -> "md"
+                "text/tab-separated-values" -> "tsv"
+                else -> null
+            }
+    } ?: return name
+    return "$name.$extension"
+}
 
 /** Nom de fichier sûr : on retire ce que les systèmes de fichiers refusent. */
 fun safeFileName(name: String, format: FileFormat): String {

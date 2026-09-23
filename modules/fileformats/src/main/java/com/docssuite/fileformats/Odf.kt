@@ -27,20 +27,23 @@ object Odf {
     // ------------------------------------------------------------ écriture
 
     fun writeText(document: TextDocument): ByteArray {
-        val textStyles = StringBuilder()
-        val paragraphStyles = StringBuilder()
+        val styles = StringBuilder()
         val body = StringBuilder()
+        var counter = 0
+        val lineHeight = if (document.lineSpacing != 100) " fo:line-height=\"${document.lineSpacing}%\"" else ""
 
-        document.paragraphs.forEachIndexed { index, paragraph ->
+        fun paragraphXml(paragraph: TextParagraph): String {
+            val index = counter++
             val paragraphStyle = "P$index"
-            paragraphStyles.append(
+            val indent = if (paragraph.indent > 0) " fo:margin-left=\"${"%.2f".format(java.util.Locale.US, paragraph.indent * 1.27)}cm\"" else ""
+            styles.append(
                 "<style:style style:name=\"$paragraphStyle\" style:family=\"paragraph\">" +
-                    "<style:paragraph-properties fo:text-align=\"${textAlign(paragraph.align)}\"/>" +
+                    "<style:paragraph-properties fo:text-align=\"${textAlign(paragraph.align)}\"$indent$lineHeight/>" +
                     "</style:style>"
             )
             val spans = paragraph.runs.mapIndexed { position, run ->
                 val name = "T${index}_$position"
-                textStyles.append(
+                styles.append(
                     "<style:style style:name=\"$name\" style:family=\"text\">" +
                         "<style:text-properties" +
                         " style:font-name=\"${xmlEscape(officeFontName(run.fontName))}\"" +
@@ -53,19 +56,88 @@ object Odf {
                         (if (run.highlight != 0L) {
                             " fo:background-color=\"#${run.highlight.toHexRgb()}\""
                         } else "") +
+                        when (run.baseline) {
+                            1 -> " style:text-position=\"super 58%\""
+                            -1 -> " style:text-position=\"sub 58%\""
+                            else -> ""
+                        } +
                         "/></style:style>"
                 )
                 "<text:span text:style-name=\"$name\">${odfText(run.text)}</text:span>"
             }.joinToString("")
-            body.append("<text:p text:style-name=\"$paragraphStyle\">$spans</text:p>")
+            return if (paragraph.heading in 1..3) {
+                "<text:h text:style-name=\"$paragraphStyle\" text:outline-level=\"${paragraph.heading}\">$spans</text:h>"
+            } else {
+                "<text:p text:style-name=\"$paragraphStyle\">$spans</text:p>"
+            }
+        }
+
+        var tableIndex = 0
+        document.blocks.ifEmpty { listOf(TextParagraph()) }.forEach { block ->
+            when (block) {
+                is TextParagraph -> body.append(paragraphXml(block))
+                is TextTable -> {
+                    val table = block.normalized()
+                    val name = "Tableau${++tableIndex}"
+                    body.append("<table:table table:name=\"$name\" table:style-name=\"$name\">")
+                    styles.append(
+                        "<style:style style:name=\"$name\" style:family=\"table\">" +
+                            "<style:table-properties style:width=\"16cm\" table:align=\"margins\"/></style:style>"
+                    )
+                    body.append("<table:table-column table:number-columns-repeated=\"${table.columnCount}\"/>")
+                    table.rows.forEachIndexed { rowIndex, row ->
+                        if (rowIndex == 0 && table.headerRow) body.append("<table:table-header-rows>")
+                        body.append("<table:table-row>")
+                        var column = 0
+                        row.cells.forEach { cell ->
+                            if (cell.mergedAbove) {
+                                body.append("<table:covered-table-cell/>")
+                                repeat(cell.colSpan - 1) { body.append("<table:covered-table-cell/>") }
+                            } else {
+                                val cellStyle = "C${tableIndex}_${rowIndex}_$column"
+                                styles.append(
+                                    "<style:style style:name=\"$cellStyle\" style:family=\"table-cell\">" +
+                                        "<style:table-cell-properties fo:padding=\"0.1cm\" fo:border=\"0.5pt solid #a0a7b4\"" +
+                                        (if (cell.fill != 0L) " fo:background-color=\"#${cell.fill.toHexRgb()}\"" else "") +
+                                        "/></style:style>"
+                                )
+                                val rowSpan = 1 + table.rows.drop(rowIndex + 1)
+                                    .takeWhile { cellStartingAt(it, column)?.mergedAbove == true }.size
+                                body.append("<table:table-cell table:style-name=\"$cellStyle\" office:value-type=\"string\"")
+                                if (cell.colSpan > 1) body.append(" table:number-columns-spanned=\"${cell.colSpan}\"")
+                                if (rowSpan > 1) body.append(" table:number-rows-spanned=\"$rowSpan\"")
+                                body.append(">")
+                                cell.paragraphs.ifEmpty { listOf(TextParagraph()) }
+                                    .forEach { body.append(paragraphXml(it)) }
+                                body.append("</table:table-cell>")
+                                repeat(cell.colSpan - 1) { body.append("<table:covered-table-cell/>") }
+                            }
+                            column += cell.colSpan
+                        }
+                        body.append("</table:table-row>")
+                        if (rowIndex == 0 && table.headerRow) body.append("</table:table-header-rows>")
+                    }
+                    body.append("</table:table>")
+                }
+            }
         }
 
         val content = XML_DECL +
             "<office:document-content ${namespaces()} office:version=\"1.3\">" +
-            "<office:automatic-styles>$paragraphStyles$textStyles</office:automatic-styles>" +
+            "<office:automatic-styles>$styles</office:automatic-styles>" +
             "<office:body><office:text>$body</office:text></office:body>" +
             "</office:document-content>"
         return pack(MIME_TEXT, content)
+    }
+
+    private fun cellStartingAt(row: TableRow, column: Int): TableCell? {
+        var position = 0
+        for (cell in row.cells) {
+            if (position == column) return cell
+            position += cell.colSpan
+            if (position > column) return null
+        }
+        return null
     }
 
     fun writeSheet(workbook: Workbook, display: (Sheet, String) -> String): ByteArray {
@@ -275,41 +347,8 @@ object Odf {
 
     // ------------------------------------------------------------ lecture
 
-    fun readText(bytes: ByteArray, title: String = "Document"): TextDocument {
-        val content = contentOf(bytes)
-        val paragraphs = ArrayList<TextParagraph>()
-        val parser = newPullParser(content)
-        val buffer = StringBuilder()
-        var inBody = false
-        var depth = 0
-
-        var event = parser.eventType
-        while (event != XmlPullParser.END_DOCUMENT) {
-            when (event) {
-                XmlPullParser.START_TAG -> when (parser.localName) {
-                    "text" -> inBody = true
-                    "p", "h" -> if (inBody) {
-                        depth++; buffer.setLength(0)
-                    }
-                    "tab" -> if (depth > 0) buffer.append('\t')
-                    "line-break" -> if (depth > 0) buffer.append('\n')
-                    "s" -> if (depth > 0) {
-                        repeat(parser.attr("c")?.toIntOrNull() ?: 1) { buffer.append(' ') }
-                    }
-                }
-                XmlPullParser.TEXT -> if (depth > 0) buffer.append(parser.text)
-                XmlPullParser.END_TAG -> when (parser.localName) {
-                    "p", "h" -> if (depth > 0) {
-                        depth--
-                        paragraphs.add(TextParagraph(listOf(TextRun(buffer.toString()))))
-                        buffer.setLength(0)
-                    }
-                }
-            }
-            event = parser.next()
-        }
-        return TextDocument(title, paragraphs.ifEmpty { listOf(TextParagraph()) })
-    }
+    fun readText(bytes: ByteArray, title: String = "Document"): TextDocument =
+        OdfTextReader.read(unzip(bytes), title)
 
     fun readSheet(bytes: ByteArray, title: String = "Classeur"): Workbook {
         val content = contentOf(bytes)
@@ -318,67 +357,104 @@ object Odf {
 
         var cells = LinkedHashMap<String, String>()
         var name = ""
-        var row = -1
+        var row = 0
         var column = 0
         var maxColumn = 0
         var lastRow = 0
         var repeatCell = 1
+        var repeatRow = 1
+        var rowHasContent = false
+        var rowCells = LinkedHashMap<Int, String>()
         var formula: String? = null
+        var typedValue: String? = null
         val buffer = StringBuilder()
+        var paragraphsInCell = 0
         var inCellText = false
+        var inTable = false
 
         var event = parser.eventType
         while (event != XmlPullParser.END_DOCUMENT) {
             when (event) {
                 XmlPullParser.START_TAG -> when (parser.localName) {
-                    "table" -> {
+                    "table" -> if (parser.name.startsWith("table")) {
                         cells = LinkedHashMap()
                         name = parser.attr("name").orEmpty()
-                        row = -1; maxColumn = 0; lastRow = 0
+                        row = 0; maxColumn = 0; lastRow = 0
+                        inTable = true
                     }
-                    "table-row" -> {
-                        row++; column = 0
+                    "table-row" -> if (inTable) {
+                        column = 0
+                        repeatRow = (parser.attr("number-rows-repeated")?.toIntOrNull() ?: 1).coerceAtLeast(1)
+                        rowHasContent = false
+                        rowCells = LinkedHashMap()
                     }
                     "table-cell", "covered-table-cell" -> {
                         repeatCell = (parser.attr("number-columns-repeated")?.toIntOrNull() ?: 1)
                             .coerceAtLeast(1)
                         formula = parser.attr("formula")
+                        typedValue = cellValue(parser)
                         buffer.setLength(0)
+                        paragraphsInCell = 0
                     }
-                    "p" -> inCellText = row >= 0
+                    "p" -> if (inTable) {
+                        if (paragraphsInCell++ > 0) buffer.append('\n')
+                        inCellText = true
+                    }
+                    "s" -> if (inCellText) buffer.append(" ".repeat((parser.attr("c")?.toIntOrNull() ?: 1).coerceIn(1, 200)))
                     "line-break" -> if (inCellText) buffer.append('\n')
                     "tab" -> if (inCellText) buffer.append('\t')
+                    // Un commentaire contient lui aussi des paragraphes : sans
+                    // cela, son texte se collait à la valeur de la cellule.
+                    "annotation", "shapes", "named-expressions", "database-ranges" -> parser.skipSubtree()
                 }
                 XmlPullParser.TEXT -> if (inCellText) buffer.append(parser.text)
                 XmlPullParser.END_TAG -> when (parser.localName) {
                     "p" -> inCellText = false
-                    "table-cell", "covered-table-cell" -> {
+                    "table-cell", "covered-table-cell" -> if (inTable) {
                         val text = formula?.let { "=" + formulaToFrench(fromOdfFormula(it)) }
+                            ?: typedValue
                             ?: buffer.toString()
-                        if (text.isEmpty() || row < 0) {
+                        if (text.isNotEmpty()) {
+                            repeat(repeatCell.coerceAtMost(MAX_REPEAT)) {
+                                rowCells[column] = text
+                                column++
+                            }
+                            rowHasContent = true
+                        } else {
                             // Une feuille ODF se termine par des milliers de
                             // cellules vides répétées : on saute la plage sans
                             // la matérialiser ni élargir la feuille.
                             column += repeatCell
-                        } else {
-                            repeat(repeatCell.coerceAtMost(MAX_REPEAT)) {
-                                cells[CellRef.key(row, column)] = text
-                                column++
-                            }
-                            maxColumn = maxOf(maxColumn, column)
-                            lastRow = row + 1
                         }
                         formula = null
+                        typedValue = null
                         buffer.setLength(0)
                     }
-                    "table" -> sheets.add(
-                        Sheet(
-                            name = name.ifBlank { "Feuille${sheets.size + 1}" },
-                            cells = cells,
-                            columns = maxOf(maxColumn, 12),
-                            rows = maxOf(lastRow, 40)
+                    "table-row" -> if (inTable) {
+                        if (rowHasContent) {
+                            // Des lignes identiques consécutives sont écrites une
+                            // seule fois avec un compteur : il faut les recopier.
+                            repeat(repeatRow.coerceAtMost(MAX_REPEAT)) {
+                                rowCells.forEach { (c, value) -> cells[CellRef.key(row, c)] = value }
+                                row++
+                            }
+                            maxColumn = maxOf(maxColumn, (rowCells.keys.maxOrNull() ?: -1) + 1)
+                            lastRow = row
+                        } else {
+                            row += repeatRow
+                        }
+                    }
+                    "table" -> if (inTable && parser.name.startsWith("table")) {
+                        sheets.add(
+                            Sheet(
+                                name = name.ifBlank { "Feuille${sheets.size + 1}" },
+                                cells = cells,
+                                columns = maxOf(maxColumn, 12),
+                                rows = maxOf(lastRow, 40)
+                            )
                         )
-                    )
+                        inTable = false
+                    }
                 }
             }
             event = parser.next()
@@ -387,53 +463,190 @@ object Odf {
         return Workbook(title, sheets)
     }
 
-    private fun fromOdfFormula(formula: String): String = formula
-        .removePrefix("of:").removePrefix("=")
-        .replace("[.", "").replace("]", "")
+    /**
+     * Valeur exacte d'une cellule typée. Le texte affiché dépend de la langue
+     * du fichier (« 1,5 » ou « 1.5 », « 15/03/2024 » ou « 3/15/24 ») ; la
+     * valeur brute, elle, est normalisée.
+     */
+    private fun cellValue(parser: XmlPullParser): String? = when (parser.attr("value-type")) {
+        "float", "percentage", "currency" -> parser.attr("value")?.let { raw ->
+            raw.toDoubleOrNull()?.let { trimNumber(it) } ?: raw
+        }
+        "boolean" -> parser.attr("boolean-value")?.let { if (it == "true") "VRAI" else "FAUX" }
+        "date" -> parser.attr("date-value")?.let { iso ->
+            val date = iso.substringBefore('T').split('-')
+            if (date.size == 3) "${date[2]}/${date[1]}/${date[0]}" else iso
+        }
+        else -> null
+    }
+
+    private fun trimNumber(value: Double): String =
+        if (value == Math.floor(value) && kotlin.math.abs(value) < 1e15) value.toLong().toString()
+        else java.math.BigDecimal(value).round(java.math.MathContext(15)).stripTrailingZeros().toPlainString()
+
+    // Formule ODF vers formule de l'app : « of:=SUM([.A1:.B2]) » donne
+    // « SUM(A1:B2) », « [$Ventes.D5] » donne « Ventes!D5 », et une feuille au
+    // nom entre apostrophes garde ses apostrophes.
+    internal fun fromOdfFormula(formula: String): String {
+        // Le préfixe d'espace de noms (`of:`, `msoxl:`) n'existe pas toujours.
+        val body = Regex("^[A-Za-z]+:(?==)").replace(formula.trim(), "").removePrefix("=")
+        val out = StringBuilder()
+        var index = 0
+        while (index < body.length) {
+            val ch = body[index]
+            when {
+                ch == '"' -> {
+                    val end = body.indexOf('"', index + 1).let { if (it < 0) body.length - 1 else it }
+                    out.append(body, index, end + 1)
+                    index = end + 1
+                }
+                ch == '[' -> {
+                    val end = body.indexOf(']', index + 1).let { if (it < 0) body.length else it }
+                    out.append(odfReference(body.substring(index + 1, end)))
+                    index = end + 1
+                }
+                else -> {
+                    out.append(ch); index++
+                }
+            }
+        }
+        return out.toString()
+    }
+
+    // Une référence entre crochets, sans eux : « .A1 », « $Feuille.A1:.B2 », « 'Nom'.A1 ».
+    private fun odfReference(reference: String): String {
+        val parts = reference.split(':').map { part ->
+            val clean = part.removePrefix("$")
+            val dot = clean.lastIndexOf('.')
+            if (dot < 0) {
+                clean.replace("$", "")
+            } else {
+                val sheet = clean.substring(0, dot).removePrefix("$")
+                val cell = clean.substring(dot + 1).replace("$", "")
+                if (sheet.isEmpty()) cell else "$sheet!$cell"
+            }
+        }
+        // `Feuille!A1:Feuille!B2` se dit `Feuille!A1:B2`.
+        if (parts.size == 2 && parts[0].contains('!') && parts[1].contains('!') &&
+            parts[0].substringBefore('!') == parts[1].substringBefore('!')
+        ) return "${parts[0]}:${parts[1].substringAfter('!')}"
+        return parts.joinToString(":")
+    }
 
     fun readDeck(bytes: ByteArray, title: String = "Présentation"): Deck {
-        val content = contentOf(bytes)
+        val parts = unzip(bytes)
+        val content = parts["content.xml"] ?: throw FormatException("Archive OpenDocument sans content.xml")
+
+        // Couleur de fond des styles de page, et style de chaque page maîtresse.
+        val pageFills = HashMap<String, Long>()
+        val masterStyles = HashMap<String, String>()
+        listOfNotNull(parts["styles.xml"], content).forEach { xml ->
+            runCatching {
+                val parser = newPullParser(xml)
+                var styleName: String? = null
+                var event = parser.eventType
+                while (event != XmlPullParser.END_DOCUMENT) {
+                    if (event == XmlPullParser.START_TAG) when (parser.localName) {
+                        "style" -> styleName = parser.attr("name")
+                        "drawing-page-properties" -> if (styleName != null && parser.attr("fill") == "solid") {
+                            parser.attr("fill-color")?.let { pageFills[styleName!!] = hexToArgb(it, 0xFFFFFFFFL) }
+                        }
+                        "master-page" -> {
+                            val master = parser.attr("name")
+                            val style = parser.attr("style-name")
+                            if (master != null && style != null) masterStyles[master] = style
+                        }
+                    }
+                    event = parser.next()
+                }
+            }
+        }
+
         val slides = ArrayList<SlideModel>()
         val parser = newPullParser(content)
-
-        var blocks = ArrayList<String>()
-        val buffer = StringBuilder()
-        var inPage = false
+        var background: Long? = null
+        var titleText = ""
+        val bodyBlocks = ArrayList<String>()
+        val notes = StringBuilder()
+        var frameClass: String? = null
+        var inNotes = false
+        val paragraph = StringBuilder()
+        val frameText = ArrayList<String>()
         var inParagraph = false
+        var tableRows: ArrayList<String>? = null
+        var tableRow: ArrayList<String>? = null
 
         var event = parser.eventType
         while (event != XmlPullParser.END_DOCUMENT) {
             when (event) {
                 XmlPullParser.START_TAG -> when (parser.localName) {
-                    "page" -> {
-                        inPage = true; blocks = ArrayList()
+                    "page" -> if (parser.name.startsWith("draw")) {
+                        titleText = ""; bodyBlocks.clear(); notes.setLength(0)
+                        background = parser.attr("style-name")?.let { pageFills[it] }
+                            ?: parser.attr("master-page-name")?.let { masterStyles[it] }?.let { pageFills[it] }
                     }
-                    "text-box" -> buffer.setLength(0)
-                    "p" -> if (inPage) {
-                        inParagraph = true
+                    "notes" -> inNotes = true
+                    "frame", "custom-shape", "rect", "ellipse" -> if (!inNotes) {
+                        frameClass = parser.attr("class")
+                        frameText.clear()
                     }
-                    "line-break" -> if (inParagraph) buffer.append('\n')
+                    "table" -> if (!inNotes) tableRows = ArrayList()
+                    "table-row" -> tableRow = ArrayList()
+                    "p", "h" -> {
+                        inParagraph = true; paragraph.setLength(0)
+                    }
+                    "s" -> if (inParagraph) paragraph.append(' ')
+                    "tab" -> if (inParagraph) paragraph.append('\t')
+                    "line-break" -> if (inParagraph) paragraph.append('\n')
+                    // Champs d'en-tête et de pied de page : le texte du masque,
+                    // pas celui de la diapositive.
+                    "page-number", "date-time", "footer", "header", "annotation", "desc", "title" ->
+                        if (parser.name.startsWith("text:") || parser.name.startsWith("office:") ||
+                            parser.name.startsWith("presentation:") || parser.name.startsWith("svg:")
+                        ) parser.skipSubtree()
                 }
-                XmlPullParser.TEXT -> if (inParagraph) buffer.append(parser.text)
+                XmlPullParser.TEXT -> if (inParagraph) paragraph.append(parser.text)
                 XmlPullParser.END_TAG -> when (parser.localName) {
-                    "p" -> if (inParagraph) {
-                        inParagraph = false; buffer.append('\n')
-                    }
-                    "text-box" -> {
-                        val text = buffer.toString().trim()
-                        if (text.isNotEmpty()) blocks.add(text)
-                        buffer.setLength(0)
-                    }
-                    "page" -> {
-                        if (blocks.isNotEmpty()) {
-                            slides.add(
-                                SlideModel(
-                                    title = blocks.first(),
-                                    content = blocks.drop(1).joinToString("\n")
-                                )
-                            )
+                    "p", "h" -> if (inParagraph) {
+                        inParagraph = false
+                        when {
+                            inNotes -> notes.append(paragraph).append('\n')
+                            tableRow != null -> tableRow!!.add(paragraph.toString())
+                            else -> frameText.add(paragraph.toString())
                         }
-                        inPage = false
+                    }
+                    "table-row" -> tableRow?.let { row ->
+                        tableRows?.add(row.joinToString(" | "))
+                        tableRow = null
+                    }
+                    "table" -> tableRows?.let { rows ->
+                        if (rows.isNotEmpty()) bodyBlocks.add(rows.joinToString("\n"))
+                        tableRows = null
+                    }
+                    "frame", "custom-shape", "rect", "ellipse" -> if (!inNotes) {
+                        val text = frameText.joinToString("\n").trim()
+                        if (text.isNotEmpty()) {
+                            if ((frameClass == "title" || frameClass == null && titleText.isEmpty() && bodyBlocks.isEmpty()) &&
+                                titleText.isEmpty()
+                            ) titleText = text else bodyBlocks.add(text)
+                        }
+                        frameText.clear()
+                        frameClass = null
+                    }
+                    "notes" -> inNotes = false
+                    "page" -> if (parser.name.startsWith("draw")) {
+                        // Une diapositive sans texte (une image, un schéma) reste
+                        // une diapositive : l'omettre décalait toute la présentation.
+                        val bg = background ?: 0xFFFFFFFFL
+                        slides.add(
+                            SlideModel(
+                                title = titleText,
+                                content = bodyBlocks.joinToString("\n"),
+                                background = bg,
+                                textColor = readableOn(bg),
+                                notes = notes.toString().trim()
+                            )
+                        )
                     }
                 }
             }
