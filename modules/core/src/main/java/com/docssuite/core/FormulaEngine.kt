@@ -55,7 +55,8 @@ object FormulaEngine {
         val raw = cells[ref] ?: return ""
         if (!raw.startsWith("=")) return raw
         return try {
-            Parser(raw.substring(1), cells, hashSetOf(ref)).parseAll().asText()
+            Parser(raw.substring(1), cells, hashSetOf(ref), ref.substringBefore('!', "").ifEmpty { null })
+                .parseAll().asText()
         } catch (cycle: CycleException) {
             "#CYCLE"
         } catch (error: Exception) {
@@ -73,9 +74,12 @@ object FormulaEngine {
         try {
             val raw = cells[ref]?.trim() ?: return Value.Blank
             if (raw.isEmpty()) return Value.Blank
+            // Une cellule d'une autre feuille calcule ses propres références
+            // dans sa feuille : « =A1 » sur Feuille2 désigne Feuille2!A1.
+            val sheet = ref.substringBefore('!', "").ifEmpty { null }
             return if (raw.startsWith("=")) {
                 try {
-                    Parser(raw.substring(1), cells, visiting).parseAll()
+                    Parser(raw.substring(1), cells, visiting, sheet).parseAll()
                 } catch (cycle: CycleException) {
                     throw cycle
                 } catch (error: Exception) {
@@ -123,6 +127,29 @@ object FormulaEngine {
     }
 
     fun cellKey(row: Int, col: Int): String = "${columnLabel(col)}${row + 1}"
+
+    /**
+     * Clé d'une cellule d'une autre feuille, telle qu'on la range dans la
+     * table des cellules : nom de feuille en majuscules, « ! », référence.
+     */
+    fun qualifiedKey(sheet: String, ref: String): String =
+        "${sheet.uppercase(Locale.ROOT)}!${ref.uppercase(Locale.ROOT)}"
+
+    /**
+     * Retire les `$` des références absolues (`$A$1`) hors des textes entre
+     * guillemets : l'app ne recopie pas les formules par glissement, la
+     * distinction n'a donc pas d'effet sur le calcul.
+     */
+    fun stripAbsolute(formula: String): String {
+        if (!formula.contains('$')) return formula
+        val sb = StringBuilder(formula.length)
+        var quoted = false
+        formula.forEach { c ->
+            if (c == '"') quoted = !quoted
+            if (c != '$' || quoted) sb.append(c)
+        }
+        return sb.toString()
+    }
 
     fun isCellRef(text: String): Boolean {
         val letters = text.takeWhile { it.isLetter() }
@@ -198,11 +225,54 @@ internal fun List<Arg>.optionalNumber(index: Int): Double? =
     if (index < size) value(index).takeIf { it != Value.Blank }?.asNumber() else null
 
 internal class Parser(
-    private val src: String,
+    source: String,
     private val cells: Map<String, String>,
-    private val visiting: MutableSet<String>
+    private val visiting: MutableSet<String>,
+    /** Feuille de la cellule évaluée ; `null` pour la feuille affichée. */
+    private val sheet: String? = null
 ) {
+    private val src = FormulaEngine.stripAbsolute(source)
     private var pos = 0
+
+    private fun key(ref: String, onSheet: String? = sheet): String =
+        if (onSheet == null) ref.uppercase(Locale.ROOT) else FormulaEngine.qualifiedKey(onSheet, ref)
+
+    /** Lit `'Nom avec espaces'!` ou `Nom!` ; renvoie le nom, ou `null` sans rien consommer. */
+    private fun readSheetPrefix(): String? {
+        val save = pos
+        if (pos < src.length && src[pos] == '\'') {
+            val sb = StringBuilder()
+            pos++
+            while (pos < src.length) {
+                if (src[pos] == '\'') {
+                    if (pos + 1 < src.length && src[pos + 1] == '\'') { sb.append('\''); pos += 2; continue }
+                    break
+                }
+                sb.append(src[pos]); pos++
+            }
+            if (pos < src.length && src[pos] == '\'' && pos + 1 < src.length && src[pos + 1] == '!') {
+                pos += 2
+                return sb.toString()
+            }
+            pos = save
+            return null
+        }
+        while (pos < src.length && (src[pos].isLetterOrDigit() || src[pos] == '_' || src[pos] == '.')) pos++
+        if (pos > save && pos < src.length && src[pos] == '!') {
+            val name = src.substring(save, pos)
+            pos++
+            return name
+        }
+        pos = save
+        return null
+    }
+
+    private fun readCellToken(): String {
+        val start = pos
+        while (pos < src.length && src[pos].isLetter()) pos++
+        while (pos < src.length && src[pos].isDigit()) pos++
+        return src.substring(start, pos)
+    }
 
     fun parseAll(): Value {
         val v = parseComparison()
@@ -336,6 +406,10 @@ internal class Parser(
             return v
         }
         if (c == '"') return parseString()
+        if (c == '\'') {
+            val onSheet = readSheetPrefix() ?: throw IllegalArgumentException("Nom de feuille invalide")
+            return sheetReference(onSheet)
+        }
         if (c.isDigit() || c == '.') return parseNumber()
         if (c.isLetter() || c == '_') return parseNameOrRef()
         throw IllegalArgumentException("Caractère '$c'")
@@ -370,6 +444,10 @@ internal class Parser(
         // Le point fait partie des noms français : NB.SI, ARRONDI.SUP…
         while (pos < src.length && (src[pos].isLetterOrDigit() || src[pos] == '_' || src[pos] == '.')) pos++
         var name = src.substring(start, pos)
+        if (pos < src.length && src[pos] == '!') {
+            pos++
+            return sheetReference(name)
+        }
         skipWs()
         if (pos < src.length && src[pos] == '(') {
             pos++
@@ -399,10 +477,31 @@ internal class Parser(
         return constantOrRef(name)
     }
 
+    /** Référence après un préfixe de feuille : une cellule, ou une plage réduite à sa première cellule. */
+    private fun sheetReference(onSheet: String): Value {
+        val ref = readCellToken()
+        if (!FormulaEngine.isCellRef(ref)) throw IllegalArgumentException("Référence invalide : $onSheet!$ref")
+        return FormulaEngine.valueAt(key(ref, onSheet), cells, visiting)
+    }
+
     /** Un argument peut être une plage A1:B3, sinon c'est une expression. */
     private fun parseArgument(): Arg {
         val save = pos
         skipWs()
+        // Plage d'une autre feuille : Feuille2!A1:B3.
+        val prefixStart = pos
+        val onSheet = readSheetPrefix()
+        if (onSheet != null) {
+            val from = readCellToken()
+            skipWs()
+            if (FormulaEngine.isCellRef(from) && pos < src.length && src[pos] == ':') {
+                pos++
+                skipWs()
+                val to = readCellToken()
+                if (FormulaEngine.isCellRef(to)) return Arg.Range(grid(from, to, onSheet))
+            }
+            pos = prefixStart
+        }
         val start = pos
         if (pos < src.length && src[pos].isLetter()) {
             while (pos < src.length && src[pos].isLetter()) pos++
@@ -428,7 +527,7 @@ internal class Parser(
         return Arg.One(parseComparison())
     }
 
-    private fun grid(from: String, to: String): List<List<Value>> {
+    private fun grid(from: String, to: String, onSheet: String? = sheet): List<List<Value>> {
         val c1 = FormulaEngine.columnIndex(from.takeWhile { it.isLetter() })
         val r1 = from.dropWhile { it.isLetter() }.toInt() - 1
         val c2 = FormulaEngine.columnIndex(to.takeWhile { it.isLetter() })
@@ -437,7 +536,7 @@ internal class Parser(
         for (r in minOf(r1, r2)..maxOf(r1, r2)) {
             val row = ArrayList<Value>()
             for (c in minOf(c1, c2)..maxOf(c1, c2)) {
-                row.add(FormulaEngine.valueAt(FormulaEngine.cellKey(r, c), cells, visiting))
+                row.add(FormulaEngine.valueAt(key(FormulaEngine.cellKey(r, c), onSheet), cells, visiting))
             }
             rows.add(row)
         }
@@ -456,6 +555,6 @@ internal class Parser(
         if (letters.isEmpty() || digits.isEmpty() || !digits.all { it.isDigit() }) {
             throw IllegalArgumentException("Référence invalide : $name")
         }
-        return FormulaEngine.valueAt(name.uppercase(Locale.ROOT), cells, visiting)
+        return FormulaEngine.valueAt(key(name), cells, visiting)
     }
 }

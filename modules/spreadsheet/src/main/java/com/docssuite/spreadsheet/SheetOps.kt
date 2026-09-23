@@ -129,11 +129,20 @@ object SheetOps {
         var i = 1
         while (i < value.length) {
             val ch = value[i]
-            if (ch == '"') {
-                val end = value.indexOf('"', i + 1)
+            // Textes entre guillemets et noms de feuille entre apostrophes
+            // passent tels quels.
+            if (ch == '"' || ch == '\'') {
+                val end = value.indexOf(ch, i + 1)
                 if (end < 0) { out.append(value.substring(i)); break }
                 out.append(value, i, end + 1)
                 i = end + 1
+                // `'Nom de feuille'!A1:B4` : la plage appartient à l'autre feuille.
+                if (ch == '\'' && i < value.length && value[i] == '!') {
+                    out.append('!'); i++
+                    while (i < value.length && (value[i].isLetterOrDigit() || value[i] == '$' || value[i] == ':')) {
+                        out.append(value[i]); i++
+                    }
+                }
                 continue
             }
             if (ch.isLetter() && (i == 1 || !value[i - 1].isLetterOrDigit())) {
@@ -141,8 +150,21 @@ object SheetOps {
                 while (j < value.length && value[j].isLetter()) j++
                 val lettersEnd = j
                 while (j < value.length && value[j].isDigit()) j++
+                // Ce qui suit un « ! » appartient à une autre feuille, et un
+                // nom suivi de « ! » est un nom de feuille : ni l'un ni l'autre
+                // ne bouge quand on modifie cette feuille-ci.
                 val isReference = lettersEnd > i && j > lettersEnd &&
-                    (j >= value.length || value[j] != '(')
+                    (j >= value.length || (value[j] != '(' && value[j] != '!')) &&
+                    value[i - 1] != '!'
+                if (!isReference && j < value.length && value[j] == '!') {
+                    out.append(value, i, j + 1)
+                    i = j + 1
+                    // La référence de l'autre feuille est recopiée sans décalage.
+                    while (i < value.length && (value[i].isLetterOrDigit() || value[i] == '$' || value[i] == ':')) {
+                        out.append(value[i]); i++
+                    }
+                    continue
+                }
                 if (isReference) {
                     val ref = value.substring(i, j)
                     out.append(moveReference(ref, rowAt, rowDelta, colAt, colDelta))

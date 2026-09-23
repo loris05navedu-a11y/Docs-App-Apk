@@ -265,7 +265,7 @@ object Xlsx {
     fun read(bytes: ByteArray, title: String = "Classeur"): Workbook {
         val parts = unzip(bytes)
         val shared = parts["xl/sharedStrings.xml"]?.let { readSharedStrings(it) } ?: emptyList()
-        val styles = parts["xl/styles.xml"]?.let { readStyles(it) } ?: emptyList()
+        val styles = parts["xl/styles.xml"]?.let { runCatching { readStyles(it) }.getOrNull() } ?: ReadStyles.EMPTY
         val relations = parseRelationships(parts["xl/_rels/workbook.xml.rels"])
         val names = parts["xl/workbook.xml"]?.let { readSheetNames(it) } ?: emptyList()
 
@@ -295,13 +295,14 @@ object Xlsx {
         var event = parser.eventType
         while (event != XmlPullParser.END_DOCUMENT) {
             if (event == XmlPullParser.START_TAG && parser.localName == "sheet") {
-                out.add(parser.attr("name").orEmpty() to parser.attr("id").orEmpty())
+                out.add(parser.attr("name").orEmpty() to (parser.relationshipId() ?: parser.attr("id").orEmpty()))
             }
             event = parser.next()
         }
         return out
     }
 
+    /** Un texte partagé peut être découpé en plusieurs portions mises en forme. */
     private fun readSharedStrings(xml: ByteArray): List<String> {
         val out = ArrayList<String>()
         val parser = newPullParser(xml)
@@ -316,6 +317,8 @@ object Xlsx {
                         inItem = true; current.setLength(0)
                     }
                     "t" -> inText = inItem
+                    // La prononciation phonétique (japonais) n'est pas le texte.
+                    "rPh", "phoneticPr" -> parser.skipSubtree()
                 }
                 XmlPullParser.TEXT -> if (inText) current.append(parser.text)
                 XmlPullParser.END_TAG -> when (parser.localName) {
@@ -330,11 +333,35 @@ object Xlsx {
         return out
     }
 
+    /** Styles de cellule et, pour chacun, s'il affiche une date. */
+    private class ReadStyles(val styles: List<CellStyle>, val dates: Set<Int>) {
+        companion object {
+            val EMPTY = ReadStyles(emptyList(), emptySet())
+        }
+    }
+
+    /** Formats intégrés d'Excel qui affichent une date ou une heure. */
+    private val builtinDateFormats = (14..22).toSet() + setOf(27, 30, 36, 45, 46, 47, 50, 57)
+
+    /**
+     * Un code de format affiche une date s'il contient un jour, une année, ou
+     * des mois avec des heures — une fois retirés textes littéraux, couleurs
+     * et caractères échappés.
+     */
+    private fun isDateFormat(code: String): Boolean {
+        val bare = code.replace(Regex("\"[^\"]*\"|\\[[^\\]]*\\]|\\\\."), "").lowercase()
+        if (bare.contains("general")) return false
+        return bare.contains('d') || bare.contains('y') || bare.contains('j') ||
+            (bare.contains('m') && bare.contains('h'))
+    }
+
     /** Résout `cellXfs` → police / remplissage / alignement en un [CellStyle]. */
-    private fun readStyles(xml: ByteArray): List<CellStyle> {
+    private fun readStyles(xml: ByteArray): ReadStyles {
         val fonts = ArrayList<Triple<Boolean, Boolean, Long>>()
         val fills = ArrayList<Long>()
         val result = ArrayList<CellStyle>()
+        val formats = HashMap<Int, String>()
+        val dates = HashSet<Int>()
 
         val parser = newPullParser(xml)
         var section = ""
@@ -352,15 +379,20 @@ object Xlsx {
         while (event != XmlPullParser.END_DOCUMENT) {
             when (event) {
                 XmlPullParser.START_TAG -> when (parser.localName) {
-                    "fonts", "fills", "cellXfs", "cellStyleXfs" -> {
+                    "fonts", "fills", "cellXfs", "cellStyleXfs", "numFmts", "dxfs" -> {
                         section = parser.localName
                         inCellXfs = section == "cellXfs"
+                    }
+                    "numFmt" -> if (section == "numFmts") {
+                        val id = parser.attr("numFmtId")?.toIntOrNull()
+                        val code = parser.attr("formatCode")
+                        if (id != null && code != null) formats[id] = code
                     }
                     "font" -> if (section == "fonts") {
                         bold = false; italic = false; color = 0xFF1A1A1AL
                     }
-                    "b" -> if (section == "fonts") bold = parser.attr("val") != "0"
-                    "i" -> if (section == "fonts") italic = parser.attr("val") != "0"
+                    "b" -> if (section == "fonts") bold = parser.attr("val") != "0" && parser.attr("val") != "false"
+                    "i" -> if (section == "fonts") italic = parser.attr("val") != "0" && parser.attr("val") != "false"
                     "color" -> if (section == "fonts") {
                         color = argbFromRgbAttribute(parser.attr("rgb"), 0xFF1A1A1AL)
                     }
@@ -375,6 +407,10 @@ object Xlsx {
                         pendingFont = parser.attr("fontId")?.toIntOrNull() ?: 0
                         pendingFill = parser.attr("fillId")?.toIntOrNull() ?: 0
                         pendingAlign = 0
+                        val numFmt = parser.attr("numFmtId")?.toIntOrNull() ?: 0
+                        if (numFmt in builtinDateFormats || formats[numFmt]?.let { isDateFormat(it) } == true) {
+                            dates.add(result.size)
+                        }
                         // Un <xf/> auto-fermant n'aura pas de END_TAG distinct
                         // détectable autrement : on l'enregistre ici et on le
                         // corrigera si un <alignment> suit.
@@ -389,7 +425,7 @@ object Xlsx {
                 XmlPullParser.END_TAG -> when (parser.localName) {
                     "font" -> if (section == "fonts") fonts.add(Triple(bold, italic, color))
                     "fill" -> if (section == "fills") fills.add(if (pattern == "solid") fillColor else 0L)
-                    "fonts", "fills", "cellXfs", "cellStyleXfs" -> {
+                    "fonts", "fills", "cellXfs", "cellStyleXfs", "numFmts", "dxfs" -> {
                         if (parser.localName == "cellXfs") inCellXfs = false
                         section = ""
                     }
@@ -397,7 +433,7 @@ object Xlsx {
             }
             event = parser.next()
         }
-        return result
+        return ReadStyles(result, dates)
     }
 
     private fun buildStyle(
@@ -433,40 +469,120 @@ object Xlsx {
         }
     }
 
+    /** Les fonctions récentes d'Excel sont écrites avec un préfixe de compatibilité. */
+    internal fun cleanFormula(formula: String): String =
+        formula.replace("_xlfn._xlws.", "").replace("_xlfn.", "").replace("_xlws.", "").replace("_xlpm.", "")
+
+    /**
+     * Décale les références relatives d'une formule, comme Excel quand il
+     * recopie une formule partagée : `A1+B1` écrite en C1 devient `A2+B2`
+     * en C2. Les parties marquées `$` ne bougent pas.
+     */
+    internal fun shiftFormula(formula: String, rows: Int, columns: Int): String {
+        val reference = Regex("(?<![A-Za-z0-9_.\"])(\\$?)([A-Z]{1,3})(\\$?)(\\d{1,7})(?![A-Za-z0-9_(])")
+        val out = StringBuilder()
+        var quoted = false
+        var segmentStart = 0
+        fun flush(end: Int) {
+            val segment = formula.substring(segmentStart, end)
+            out.append(
+                if (quoted) segment else reference.replace(segment) { m ->
+                    val (colAbs, col, rowAbs, row) = m.destructured
+                    val newCol = if (colAbs.isEmpty()) CellRef.columnIndex(col) + columns else CellRef.columnIndex(col)
+                    val newRow = if (rowAbs.isEmpty()) row.toInt() + rows else row.toInt()
+                    if (newCol < 0 || newRow < 1) "#REF!"
+                    else "$colAbs${CellRef.columnLabel(newCol)}$rowAbs$newRow"
+                }
+            )
+            segmentStart = end
+        }
+        formula.forEachIndexed { index, c ->
+            if (c == '"') {
+                flush(if (quoted) index + 1 else index)
+                quoted = !quoted
+            }
+        }
+        flush(formula.length)
+        return out.toString()
+    }
+
+    /** Excel stocke 0,1+0,2 comme 0.30000000000000004 : on arrondit à sa précision de 15 chiffres. */
+    private fun cleanNumber(raw: String): String {
+        if (raw.length < 16) return raw
+        val number = raw.toDoubleOrNull() ?: return raw
+        return java.math.BigDecimal(number).round(java.math.MathContext(15)).stripTrailingZeros().toPlainString()
+    }
+
+    /** Numéro de série Excel (jours depuis le 30/12/1899) → date lisible. */
+    private fun serialToDate(raw: String): String? {
+        val serial = raw.toDoubleOrNull() ?: return null
+        if (serial < 1 || serial > 2958465) return null
+        val days = kotlin.math.floor(serial).toLong()
+        val date = java.time.LocalDate.of(1899, 12, 30).plusDays(days)
+        val base = "%02d/%02d/%04d".format(date.dayOfMonth, date.monthValue, date.year)
+        val fraction = serial - days
+        if (fraction < 1e-9) return base
+        val minutes = kotlin.math.round(fraction * 24 * 60).toInt()
+        return "$base %02d:%02d".format(minutes / 60 % 24, minutes % 60)
+    }
+
+    /** Au-delà, une feuille n'est plus lisible sur un téléphone : on le dit plutôt que de figer l'app. */
+    private const val MAX_ROWS = 100_000
+    private const val MAX_COLUMNS = 702
+
     private fun readSheet(
         xml: ByteArray,
         name: String,
         shared: List<String>,
-        styles: List<CellStyle>
+        styles: ReadStyles
     ): Sheet {
         val cells = LinkedHashMap<String, String>()
         val formats = LinkedHashMap<String, CellStyle>()
         var maxRow = 0
         var maxColumn = 0
+        // Formules partagées : identifiant → (formule d'origine, sa ligne, sa colonne).
+        val sharedFormulas = HashMap<String, Triple<String, Int, Int>>()
 
         val parser = newPullParser(xml)
+        var row = 0
+        var column = 0
+        var seenRow = false
         var ref = ""
         var type = ""
         var styleId = -1
         var formula: String? = null
+        var formulaType = ""
+        var sharedIndex: String? = null
         var value: String? = null
         var inValue = false
         var inFormula = false
         var inInlineText = false
         val buffer = StringBuilder()
+        val inline = StringBuilder()
 
         var event = parser.eventType
         while (event != XmlPullParser.END_DOCUMENT) {
             when (event) {
                 XmlPullParser.START_TAG -> when (parser.localName) {
+                    "row" -> {
+                        // Sans numéro, une ligne suit la précédente.
+                        row = parser.attr("r")?.toIntOrNull()?.minus(1) ?: if (seenRow) row + 1 else 0
+                        seenRow = true
+                        column = 0
+                    }
                     "c" -> {
+                        // L'adresse est facultative : sans elle, la cellule suit la précédente.
                         ref = parser.attr("r").orEmpty()
+                        CellRef.parse(ref)?.let { column = it.second } ?: run { ref = CellRef.key(row, column) }
                         type = parser.attr("t").orEmpty()
                         styleId = parser.attr("s")?.toIntOrNull() ?: -1
-                        formula = null; value = null
+                        formula = null; value = null; formulaType = ""; sharedIndex = null
+                        inline.setLength(0)
                     }
                     "f" -> {
                         inFormula = true; buffer.setLength(0)
+                        formulaType = parser.attr("t").orEmpty()
+                        sharedIndex = parser.attr("si")
                     }
                     "v" -> {
                         inValue = true; buffer.setLength(0)
@@ -474,6 +590,7 @@ object Xlsx {
                     "t" -> if (type == "inlineStr") {
                         inInlineText = true; buffer.setLength(0)
                     }
+                    "rPh", "extLst" -> parser.skipSubtree()
                 }
                 XmlPullParser.TEXT -> if (inValue || inFormula || inInlineText) buffer.append(parser.text)
                 XmlPullParser.END_TAG -> when (parser.localName) {
@@ -484,24 +601,43 @@ object Xlsx {
                         value = buffer.toString(); inValue = false
                     }
                     "t" -> if (inInlineText) {
-                        value = buffer.toString(); inInlineText = false
+                        inline.append(buffer); inInlineText = false
                     }
                     "c" -> {
                         val position = CellRef.parse(ref)
-                        if (position != null) {
-                            maxRow = maxOf(maxRow, position.first + 1)
-                            maxColumn = maxOf(maxColumn, position.second + 1)
-                            val text = when {
-                                formula != null -> "=" + formulaToFrench(formula!!)
+                        if (position != null && position.first < MAX_ROWS && position.second < MAX_COLUMNS) {
+                            val (r, c) = position
+                            // Une formule partagée vide reprend celle de sa cellule
+                            // d'origine, décalée de la distance qui les sépare.
+                            var text = formula
+                            if (formulaType == "shared" && sharedIndex != null) {
+                                if (!text.isNullOrBlank()) {
+                                    sharedFormulas[sharedIndex!!] = Triple(text!!, r, c)
+                                } else {
+                                    text = sharedFormulas[sharedIndex!!]?.let { (origin, originRow, originColumn) ->
+                                        shiftFormula(origin, r - originRow, c - originColumn)
+                                    }
+                                }
+                            }
+                            val content = when {
+                                !text.isNullOrBlank() -> "=" + formulaToFrench(cleanFormula(text!!))
                                 type == "s" -> shared.getOrNull(value?.toIntOrNull() ?: -1).orEmpty()
                                 type == "b" -> if (value == "1") "VRAI" else "FAUX"
-                                else -> value.orEmpty()
+                                type == "inlineStr" -> inline.toString()
+                                type == "str" || type == "e" -> value.orEmpty()
+                                value != null && styleId in styles.dates -> serialToDate(value!!) ?: cleanNumber(value!!)
+                                else -> value?.let { cleanNumber(it) }.orEmpty()
                             }
-                            if (text.isNotEmpty()) cells[ref] = text
-                            styles.getOrNull(styleId)
+                            if (content.isNotEmpty()) {
+                                cells[ref.uppercase()] = content
+                                maxRow = maxOf(maxRow, r + 1)
+                                maxColumn = maxOf(maxColumn, c + 1)
+                            }
+                            styles.styles.getOrNull(styleId)
                                 ?.takeIf { !it.isDefault }
-                                ?.let { formats[ref] = it }
+                                ?.let { formats[ref.uppercase()] = it }
                         }
+                        column++
                         ref = ""; type = ""; styleId = -1
                     }
                 }
@@ -509,10 +645,15 @@ object Xlsx {
             event = parser.next()
         }
 
+        // Une mise en forme posée sur des colonnes entières (fréquent) ne doit
+        // pas faire croire à une feuille de millions de lignes.
+        val bounded = formats.filterKeys { key ->
+            CellRef.parse(key)?.let { (r, c) -> r < maxRow + 1 && c < maxColumn + 1 } ?: false
+        }
         return Sheet(
             name = name,
             cells = cells,
-            styles = formats,
+            styles = bounded,
             columns = maxOf(maxColumn, 12),
             rows = maxOf(maxRow, 40)
         )

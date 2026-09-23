@@ -31,6 +31,12 @@ android {
     testOptions {
         unitTests {
             includeAndroidResources = true
+            all {
+                // Captures d'écran à la demande : ./gradlew … -Pscreenshots=dossier
+                if (project.hasProperty('screenshots')) {
+                    systemProperty 'screenshots', project.property('screenshots')
+                }
+            }
         }
     }
 }

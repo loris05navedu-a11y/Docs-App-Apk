@@ -175,4 +175,63 @@ class ForeignDocumentsTest {
         assertTrue(table.columnCount <= 64)
         assertEquals("après", (document.blocks.last() as TextParagraph).plainText)
     }
+
+    // ------------------------------------------------------------ classeurs et présentations
+
+    private fun workbook(name: String): Workbook =
+        (FileFormats.import(name, corpus(name)) as Imported.AsSheet).workbook
+
+    @Test
+    fun `une formule partagee d Excel est recopiee et decalee`() {
+        val sheet = workbook("formules-partagees.xlsx").sheets.first()
+        assertEquals("=A1+B1", sheet.cells["C1"])
+        assertEquals("=A2+B2", sheet.cells["C2"])
+        // Ligne 3 : cellules sans adresse, placées à la suite.
+        assertEquals("3", sheet.cells["A3"])
+        assertEquals("=A3+B3", sheet.cells["C3"])
+        assertEquals("Riche texte", sheet.cells["A4"])
+        assertEquals("0.3", sheet.cells["B4"])
+        assertFalse(sheet.cells["C4"]!!.contains("_xlfn"))
+    }
+
+    @Test
+    fun `une cellule mise en forme au bout de la feuille ne la rend pas geante`() {
+        val sheet = workbook("formules-partagees.xlsx").sheets.first()
+        assertTrue("${sheet.columns} × ${sheet.rows}", sheet.columns <= 12 && sheet.rows <= 40)
+    }
+
+    @Test
+    fun `les dates Excel s affichent en dates`() {
+        assertEquals("15/03/2024", workbook("classeur-excel.xlsx").sheets.first().cells["B7"])
+    }
+
+    @Test
+    fun `un classeur LibreOffice garde ses lignes, formules et feuilles`() {
+        val book = workbook("classeur-libreoffice.ods")
+        val sales = book.sheets[0]
+        assertEquals("=SOMME(D2:D4)", sales.cells["D5"])
+        // Des lignes vides répétées séparent A7 de F40 : elles comptent.
+        assertEquals("loin", sales.cells["F40"])
+        assertEquals("15/03/2024", sales.cells["B7"])
+        assertEquals("=Ventes!D5", book.sheets[1].cells["B1"])
+        assertEquals("Synthèse 2024", book.sheets[1].name)
+    }
+
+    @Test
+    fun `une presentation garde toutes ses diapositives, ses notes et son fond clair`() {
+        listOf("presentation-powerpoint.pptx", "presentation-libreoffice.odp").forEach { name ->
+            val deck = (FileFormats.import(name, corpus(name)) as Imported.AsDeck).deck
+            assertEquals("$name : diapositives", 4, deck.slides.size)
+            assertEquals("Présentation annuelle", deck.slides[0].title)
+            assertEquals("Ordre du jour", deck.slides[1].title)
+            assertEquals("Bilan\nPerspectives", deck.slides[1].content)
+            assertEquals("$name : notes", "Parler lentement", deck.slides[1].notes)
+            assertEquals("", deck.slides[0].notes)
+            assertTrue(deck.slides[2].content.contains("L1C1 | L1C2"))
+            deck.slides.forEach { slide ->
+                assertEquals("$name : fond", 0xFFFFFFFFL, slide.background)
+                assertEquals("$name : texte lisible", readableOn(0xFFFFFFFFL), slide.textColor)
+            }
+        }
+    }
 }

@@ -114,4 +114,10 @@ class SheetOpsTest {
         assertEquals(7, result.formats["A4"])
         assertEquals(null, result.formats["A3"])
     }
+
+    @Test
+    fun `inserer une ligne ne touche pas aux references d une autre feuille`() {
+        val moved = SheetOps.adjustFormula("=Feuille2!A1+A1+'Mes ventes'!B2:B4", rowAt = 0, rowDelta = 1, colAt = -1, colDelta = 0)
+        assertEquals("=Feuille2!A1+A2+'Mes ventes'!B2:B4", moved)
+    }
 }

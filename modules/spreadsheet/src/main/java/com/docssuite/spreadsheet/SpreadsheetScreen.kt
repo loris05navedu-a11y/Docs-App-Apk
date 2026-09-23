@@ -1,6 +1,8 @@
 package com.docssuite.spreadsheet
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -36,6 +38,11 @@ import androidx.compose.material.icons.filled.Functions
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Redo
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Divider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -52,6 +59,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -114,18 +123,27 @@ internal data class CellFormat(
     val align: Int = 0 // 0 = auto, 1 = gauche, 2 = centre, 3 = droite
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+private data class WorkbookSnapshot(val sheets: List<SheetState>, val active: Int, val selected: String)
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
     val context = LocalContext.current
     val storage = remember { DocumentStorage(context) }
 
+    // La feuille affichée vit dans ces états « à plat » ; les autres feuilles
+    // attendent dans [sheets], resynchronisée à chaque changement d'onglet.
     val cells = remember { mutableStateMapOf<String, String>() }
     val formats = remember { mutableStateMapOf<String, CellFormat>() }
     var columns by remember { mutableStateOf(DEFAULT_COLUMNS) }
     var rows by remember { mutableStateOf(DEFAULT_ROWS) }
+    var freezeRow by remember { mutableStateOf(false) }
+    var freezeColumn by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf("A1") }
     var editing by remember { mutableStateOf("") }
+
+    val sheets = remember { mutableStateListOf(SheetState("Feuille1")) }
+    var active by remember { mutableStateOf(0) }
 
     var docId by remember { mutableStateOf(storage.newId()) }
     var docName by remember { mutableStateOf("Classeur sans titre") }
@@ -140,6 +158,12 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
     var showChart by remember { mutableStateOf(false) }
     var showCalculator by remember { mutableStateOf(false) }
     var showExport by remember { mutableStateOf(false) }
+    var showFind by remember { mutableStateOf(false) }
+    var sheetMenuFor by remember { mutableStateOf(-1) }
+    var renameSheetIndex by remember { mutableStateOf(-1) }
+    var deleteSheetIndex by remember { mutableStateOf(-1) }
+    var findQuery by remember { mutableStateOf("") }
+    var findReplacement by remember { mutableStateOf("") }
 
     // Format retenu le temps que l'utilisateur choisisse où ranger le fichier.
     var pendingFormat by remember { mutableStateOf(FileFormat.XLSX) }
@@ -150,6 +174,10 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
     val gridState = rememberLazyListState()
     val density = LocalDensity.current
     val cellHeightPx = with(density) { CELL_HEIGHT.toPx() }
+
+    val undoStack = remember { mutableListOf<WorkbookSnapshot>() }
+    val redoStack = remember { mutableListOf<WorkbookSnapshot>() }
+    var historyVersion by remember { mutableStateOf(0) }
 
     fun updateChart(id: String, transform: (EmbeddedChart) -> EmbeddedChart) {
         val index = charts.indexOfFirst { it.id == id }
@@ -163,7 +191,95 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
     val hScroll = rememberScrollState()
     val format = formats[selected] ?: CellFormat()
 
+    // ------------------------------------------------------------ classeur
+
+    /** La feuille affichée, figée dans la liste des feuilles. */
+    fun liveSheet() = SheetState(
+        name = sheets.getOrNull(active)?.name ?: "Feuille1",
+        cells = cells.toMap(),
+        formats = formats.toMap(),
+        columns = columns,
+        rows = rows,
+        charts = charts.toList(),
+        freezeRow = freezeRow,
+        freezeColumn = freezeColumn
+    )
+
+    fun allSheets(): List<SheetState> = sheets.toMutableList().also { list ->
+        if (active in list.indices) list[active] = liveSheet()
+    }
+
+    fun syncActive() {
+        if (active in sheets.indices) sheets[active] = liveSheet()
+    }
+
+    fun showSheet(index: Int) {
+        val sheet = sheets.getOrNull(index) ?: return
+        active = index
+        cells.clear(); cells.putAll(sheet.cells)
+        formats.clear(); formats.putAll(sheet.formats)
+        charts.clear(); charts.addAll(sheet.charts)
+        columns = sheet.columns
+        rows = sheet.rows
+        freezeRow = sheet.freezeRow
+        freezeColumn = sheet.freezeColumn
+        selectedChartId = null
+        selected = "A1"
+        editing = cells["A1"].orEmpty()
+    }
+
+    fun replaceWorkbook(newSheets: List<SheetState>, newActive: Int) {
+        sheets.clear()
+        sheets.addAll(newSheets.ifEmpty { listOf(SheetState("Feuille1")) })
+        showSheet(newActive.coerceIn(0, sheets.lastIndex))
+    }
+
+    fun switchTo(index: Int) {
+        if (index == active || index !in sheets.indices) return
+        syncActive()
+        showSheet(index)
+    }
+
+    // Le moteur voit la feuille affichée et toutes les autres ; les valeurs
+    // calculées sont mises en cache jusqu'à la prochaine modification.
+    val engine by remember {
+        derivedStateOf {
+            val live = cells.toMap()
+            val list = sheets.toMutableList()
+            if (active in list.indices) list[active] = list[active].copy(cells = live)
+            WorkbookOps.engineCells(list, active)
+        }
+    }
+    val shownCache = remember(engine) { HashMap<String, String>() }
+    fun shown(key: String): String = shownCache.getOrPut(key) { FormulaEngine.displayValue(key, engine) }
+
+    // ------------------------------------------------------------ historique
+
+    fun snapshot() = WorkbookSnapshot(allSheets(), active, selected)
+
+    fun pushUndo() {
+        undoStack.add(snapshot())
+        if (undoStack.size > 60) undoStack.removeAt(0)
+        redoStack.clear()
+        historyVersion++
+    }
+
+    fun restore(state: WorkbookSnapshot) {
+        sheets.clear(); sheets.addAll(state.sheets)
+        showSheet(state.active.coerceIn(0, sheets.lastIndex))
+        selected = state.selected
+        editing = cells[selected].orEmpty()
+        historyVersion++
+    }
+
+    fun resetHistory() {
+        undoStack.clear(); redoStack.clear(); historyVersion++
+    }
+
+    // ------------------------------------------------------------ cellules
+
     fun updateFormat(transform: (CellFormat) -> CellFormat) {
+        pushUndo()
         formats[selected] = transform(formats[selected] ?: CellFormat())
     }
 
@@ -180,7 +296,10 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
     fun applyGridEdit(
         operation: (Map<String, String>, Map<String, CellFormat>, Int) -> SheetData<CellFormat>,
         index: Int
-    ) = replaceGrid(operation(cells.toMap(), formats.toMap(), index))
+    ) {
+        pushUndo()
+        replaceGrid(operation(cells.toMap(), formats.toMap(), index))
+    }
 
     /**
      * Trie de la cellule choisie jusqu'à la dernière ligne remplie. Partir de
@@ -188,9 +307,9 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
      */
     fun sortColumn(ascending: Boolean) {
         val column = selectedColumn()
-        val lastFilled = (0 until rows).lastOrNull { row ->
-            (0 until columns).any { cells[FormulaEngine.cellKey(row, it)].isNullOrBlank().not() }
-        } ?: return
+        val lastFilled = cells.keys.mapNotNull { key -> key.dropWhile { it.isLetter() }.toIntOrNull()?.minus(1) }
+            .maxOrNull() ?: return
+        pushUndo()
         replaceGrid(
             SheetOps.sortByColumn(
                 cells.toMap(), formats.toMap(),
@@ -204,7 +323,11 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
     }
 
     fun commitEdit(moveDown: Boolean = false) {
-        if (editing.isBlank()) cells.remove(selected) else cells[selected] = editing.trim()
+        val newValue = editing.trim()
+        if (newValue != cells[selected].orEmpty()) {
+            pushUndo()
+            if (newValue.isEmpty()) cells.remove(selected) else cells[selected] = newValue
+        }
         if (moveDown) {
             val column = FormulaEngine.columnIndex(selected.takeWhile { it.isLetter() })
             val currentRow = selected.dropWhile { it.isLetter() }.toIntOrNull() ?: return
@@ -217,24 +340,24 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
         }
     }
 
-    fun toCsv(): String = (0 until rows).joinToString("\n") { r ->
-        (0 until columns).joinToString(";") { c ->
-            FormulaEngine.displayValue(FormulaEngine.cellKey(r, c), cells)
+    fun toCsv(): String {
+        val lastRow = cells.keys.mapNotNull { CellRefRow(it) }.maxOrNull() ?: 0
+        val lastColumn = cells.keys.maxOfOrNull { FormulaEngine.columnIndex(it.takeWhile { c -> c.isLetter() }) } ?: 0
+        return (0..lastRow).joinToString("\n") { r ->
+            (0..lastColumn).joinToString(";") { c -> shown(FormulaEngine.cellKey(r, c)) }
         }
     }
 
     fun openDocument(id: String, name: String) {
         val payload = storage.load(id) ?: return
-        val decoded = decodeSheet(payload)
-        cells.clear(); cells.putAll(decoded.cells)
-        formats.clear(); formats.putAll(decoded.formats)
-        charts.clear(); charts.addAll(decoded.charts)
-        selectedChartId = null
-        columns = decoded.columns
-        rows = decoded.rows
-        docId = id
-        docName = name
-        selected = "A1"
+        runCatching { WorkbookOps.decode(payload) }
+            .onSuccess { (loaded, index) ->
+                replaceWorkbook(loaded, index)
+                docId = id
+                docName = name
+                resetHistory()
+            }
+            .onFailure { notice = "Ouverture impossible" to "« $name » est endommagé." }
     }
 
     LaunchedEffect(initialDocId) {
@@ -244,13 +367,14 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
         }
     }
 
-    fun currentWorkbook() = buildWorkbook(docName, cells, formats, columns, rows)
+    fun currentWorkbook() = buildWorkbook(docName, allSheets())
 
     val fileSaver = rememberFileSaver(
         onError = { notice = "Enregistrement impossible" to it },
         onSaved = { notice = "Fichier enregistré" to "« $it » est disponible à l'emplacement choisi." },
         content = {
-            FileFormats.exportSheet(pendingFormat, currentWorkbook(), ::sheetDisplayValue)
+            val all = allSheets()
+            FileFormats.exportSheet(pendingFormat, buildWorkbook(docName, all), workbookDisplay(all))
         }
     )
 
@@ -259,30 +383,31 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
     ) { picked ->
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                runCatching { FileFormats.import(picked.name, picked.bytes) }
+                runCatching {
+                    val imported = FileFormats.import(picked.name, picked.bytes)
+                    imported to (imported as? Imported.AsSheet)?.let { decodeWorkbook(it.workbook) }
+                }
             }
             result
-                .onSuccess { imported ->
-                    if (imported is Imported.AsSheet) {
-                        val decoded = decodeWorkbook(imported.workbook, imported.suggestedName)
-                        cells.clear(); cells.putAll(decoded.cells)
-                        formats.clear(); formats.putAll(decoded.formats)
-                        charts.clear()
-                        selectedChartId = null
-                        columns = maxOf(decoded.columns, DEFAULT_COLUMNS)
-                        rows = maxOf(decoded.rows, DEFAULT_ROWS)
+                .onSuccess { (imported, decoded) ->
+                    if (decoded != null) {
+                        replaceWorkbook(decoded, 0)
                         // Un import devient un nouveau classeur : on ne veut pas
                         // écraser celui qui était ouvert.
                         docId = storage.newId()
                         docName = imported.suggestedName
-                        selected = "A1"
+                        resetHistory()
                     } else {
                         notice = "Ce n'est pas un classeur" to
                             "« ${picked.name} » est un document, une présentation ou un PDF. " +
                             "Ouvrez-le depuis l'accueil."
                     }
                 }
-                .onFailure { notice = "Import impossible" to (it.message ?: "Fichier illisible") }
+                .onFailure {
+                    notice = "Import impossible" to
+                        if (it is OutOfMemoryError) "Ce fichier est trop lourd pour la mémoire du téléphone."
+                        else (it.message ?: "Fichier illisible")
+                }
         }
     }
 
@@ -293,9 +418,9 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
         when (action) {
             ExportAction.SAVE -> fileSaver.save(fileName, format.mime)
             ExportAction.SHARE -> scope.launch {
-                val workbook = currentWorkbook()
+                val all = allSheets()
                 val produced = withContext(Dispatchers.IO) {
-                    runCatching { FileFormats.exportSheet(format, workbook, ::sheetDisplayValue) }
+                    runCatching { FileFormats.exportSheet(format, buildWorkbook(docName, all), workbookDisplay(all)) }
                 }
                 produced
                     .onSuccess {
@@ -310,6 +435,61 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
         }
     }
 
+    // ------------------------------------------------------------ recherche
+
+    /** Parcourt la feuille ligne par ligne à partir de la cellule choisie. */
+    fun findNext(): String? {
+        if (findQuery.isEmpty()) return null
+        val keys = cells.keys.filter { cells[it]!!.contains(findQuery, ignoreCase = true) }
+            .sortedWith(compareBy({ CellRefRow(it) ?: 0 }, { FormulaEngine.columnIndex(it.takeWhile { c -> c.isLetter() }) }))
+        if (keys.isEmpty()) return null
+        val row = selectedRow()
+        val column = selectedColumn()
+        return keys.firstOrNull { key ->
+            val r = CellRefRow(key) ?: 0
+            val c = FormulaEngine.columnIndex(key.takeWhile { it.isLetter() })
+            r > row || (r == row && c > column)
+        } ?: keys.first()
+    }
+
+    fun goTo(key: String) {
+        commitEdit()
+        selected = key
+        val row = CellRefRow(key) ?: 0
+        scope.launch { gridState.animateScrollToItem((row - if (freezeRow) 1 else 0).coerceAtLeast(0)) }
+        val column = FormulaEngine.columnIndex(key.takeWhile { it.isLetter() })
+        scope.launch { hScroll.animateScrollTo(with(density) { (CELL_WIDTH * column).roundToPx() }) }
+    }
+
+    // ------------------------------------------------------------ interface
+
+    @Composable
+    fun Cell(r: Int, c: Int) {
+        val key = FormulaEngine.cellKey(r, c)
+        GridCell(
+            value = shown(key),
+            format = formats[key] ?: CellFormat(),
+            isSelected = key == selected,
+            onClick = {
+                commitEdit()
+                selected = key
+                selectedChartId = null
+            }
+        )
+    }
+
+    @Composable
+    fun GridRow(r: Int) {
+        Row(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+            val rowActive = selected.dropWhile { it.isLetter() }.toIntOrNull() == r + 1
+            HeaderCell("${r + 1}", HEADER_WIDTH, rowActive)
+            if (freezeColumn) Cell(r, 0)
+            Row(modifier = Modifier.horizontalScroll(hScroll)) {
+                for (c in (if (freezeColumn) 1 else 0) until columns) Cell(r, c)
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -317,7 +497,7 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                     Column(modifier = Modifier.clickable { showRename = true }) {
                         Text(docName, maxLines = 1, style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "$columns colonnes · $rows lignes",
+                            "${sheets.size} feuille${if (sheets.size > 1) "s" else ""} · $columns colonnes · $rows lignes",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -331,12 +511,8 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                 actions = {
                     IconButton(onClick = {
                         commitEdit()
-                        storage.save(
-                            docId,
-                            docName,
-                            DocType.SHEET,
-                            encodeSheet(cells, formats, columns, rows, charts)
-                        )
+                        syncActive()
+                        storage.save(docId, docName, DocType.SHEET, WorkbookOps.encode(sheets.toList(), active))
                         notice = "Classeur enregistré" to
                             "« $docName » a bien été enregistré dans l'application."
                     }) {
@@ -351,26 +527,16 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                                 text = { Text("Nouveau classeur") },
                                 onClick = {
                                     showMenu = false
-                                    cells.clear(); formats.clear(); charts.clear()
-                                    selectedChartId = null
-                                    columns = DEFAULT_COLUMNS; rows = DEFAULT_ROWS
+                                    replaceWorkbook(listOf(SheetState("Feuille1")), 0)
                                     docId = storage.newId(); docName = "Classeur sans titre"
-                                    selected = "A1"
+                                    resetHistory()
                                 }
                             )
-                            DropdownMenuItem(
-                                text = { Text("Ouvrir…") },
-                                onClick = { showMenu = false; showOpen = true }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Renommer") },
-                                onClick = { showMenu = false; showRename = true }
-                            )
+                            DropdownMenuItem(text = { Text("Ouvrir…") }, onClick = { showMenu = false; showOpen = true })
+                            DropdownMenuItem(text = { Text("Renommer") }, onClick = { showMenu = false; showRename = true })
                             DropdownMenuItem(
                                 text = { Text("Importer un fichier…") },
-                                leadingIcon = {
-                                    Icon(Icons.Filled.FileOpen, contentDescription = null)
-                                },
+                                leadingIcon = { Icon(Icons.Filled.FileOpen, contentDescription = null) },
                                 onClick = {
                                     showMenu = false
                                     fileOpener.open(importMimeTypes(DocKind.SHEET))
@@ -378,14 +544,26 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                             )
                             DropdownMenuItem(
                                 text = { Text("Exporter (Excel, PDF…)") },
-                                leadingIcon = {
-                                    Icon(Icons.Filled.FileDownload, contentDescription = null)
-                                },
+                                leadingIcon = { Icon(Icons.Filled.FileDownload, contentDescription = null) },
                                 onClick = { showMenu = false; showExport = true }
                             )
                             DropdownMenuItem(
                                 text = { Text("Partager en texte CSV") },
                                 onClick = { showMenu = false; shareText(context, "$docName.csv", toCsv()) }
+                            )
+                            Divider()
+                            DropdownMenuItem(
+                                text = { Text("Rechercher et remplacer") },
+                                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                                onClick = { showMenu = false; commitEdit(); showFind = true }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (freezeRow) "✓ Ligne 1 figée" else "Figer la ligne 1") },
+                                onClick = { showMenu = false; freezeRow = !freezeRow }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (freezeColumn) "✓ Colonne A figée" else "Figer la colonne A") },
+                                onClick = { showMenu = false; freezeColumn = !freezeColumn }
                             )
                             Divider()
                             DropdownMenuItem(
@@ -414,44 +592,61 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                                 onClick = { showMenu = false; sortColumn(ascending = false) }
                             )
                             Divider()
-                            DropdownMenuItem(
-                                text = { Text("Ajouter 10 lignes") },
-                                onClick = { showMenu = false; rows += 10 }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Ajouter 3 colonnes") },
-                                onClick = { showMenu = false; columns += 3 }
-                            )
+                            DropdownMenuItem(text = { Text("Ajouter 10 lignes") }, onClick = { showMenu = false; rows += 10 })
+                            DropdownMenuItem(text = { Text("Ajouter 3 colonnes") }, onClick = { showMenu = false; columns += 3 })
                             Divider()
-                            DropdownMenuItem(
-                                text = { Text("Tout effacer") },
-                                onClick = { showMenu = false; showClearAll = true }
-                            )
+                            DropdownMenuItem(text = { Text("Tout effacer") }, onClick = { showMenu = false; showClearAll = true })
                         }
                     }
                 }
             )
         },
         bottomBar = {
-            val columnIndex = FormulaEngine.columnIndex(selected.takeWhile { it.isLetter() })
-            val columnRefs = (0 until rows).map { FormulaEngine.cellKey(it, columnIndex) }
-            val (sum, avg, count) = FormulaEngine.quickStats(columnRefs, cells)
-            Surface(tonalElevation = 3.dp) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(20.dp)
-                ) {
-                    Text(
-                        "Colonne ${FormulaEngine.columnLabel(columnIndex)} :",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text("Somme ${FormulaEngine.formatNumber(sum)}", style = MaterialTheme.typography.labelMedium)
-                    Text("Moyenne ${FormulaEngine.formatNumber(avg)}", style = MaterialTheme.typography.labelMedium)
-                    Text("Nombres $count", style = MaterialTheme.typography.labelMedium)
+            Column {
+                SheetTabs(
+                    names = sheets.map { it.name },
+                    active = active,
+                    onSelect = { commitEdit(); switchTo(it) },
+                    onMenu = { sheetMenuFor = it },
+                    onAdd = {
+                        commitEdit()
+                        pushUndo()
+                        syncActive()
+                        sheets.add(SheetState(WorkbookOps.uniqueName(sheets)))
+                        showSheet(sheets.lastIndex)
+                    }
+                )
+                val columnIndex = selectedColumn()
+                // Les statistiques ne parcourent que la partie remplie de la colonne.
+                val lastRow = cells.keys.mapNotNull { key ->
+                    if (FormulaEngine.columnIndex(key.takeWhile { it.isLetter() }) == columnIndex) CellRefRow(key) else null
+                }.maxOrNull() ?: -1
+                val numbers = (0..lastRow).mapNotNull { r ->
+                    val shownValue = shown(FormulaEngine.cellKey(r, columnIndex))
+                    if (shownValue.isBlank() || shownValue.startsWith("#")) null
+                    else shownValue.replace(" ", "").replace(',', '.').toDoubleOrNull()
+                }
+                val sum = numbers.sum()
+                Surface(tonalElevation = 3.dp) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(20.dp)
+                    ) {
+                        Text(
+                            "Colonne ${FormulaEngine.columnLabel(columnIndex)} :",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text("Somme ${FormulaEngine.formatNumber(sum)}", style = MaterialTheme.typography.labelMedium)
+                        Text(
+                            "Moyenne ${FormulaEngine.formatNumber(if (numbers.isEmpty()) 0.0 else sum / numbers.size)}",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        Text("Nombres ${numbers.size}", style = MaterialTheme.typography.labelMedium)
+                    }
                 }
             }
         }
@@ -507,6 +702,21 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                         .padding(horizontal = 4.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    key(historyVersion) {
+                        ToolToggle(Icons.Filled.Undo, "Annuler", enabled = undoStack.isNotEmpty()) {
+                            commitEdit()
+                            undoStack.removeLastOrNull()?.let { previous ->
+                                redoStack.add(snapshot())
+                                restore(previous)
+                            }
+                        }
+                        ToolToggle(Icons.Filled.Redo, "Rétablir", enabled = redoStack.isNotEmpty()) {
+                            redoStack.removeLastOrNull()?.let { next ->
+                                undoStack.add(snapshot())
+                                restore(next)
+                            }
+                        }
+                    }
                     ToolToggle(Icons.Filled.Calculate, "Calculatrice") {
                         commitEdit()
                         showCalculator = true
@@ -515,6 +725,10 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                     ToolToggle(Icons.Filled.PieChart, "Créer un graphique") {
                         commitEdit()
                         showChart = true
+                    }
+                    ToolToggle(Icons.Filled.Search, "Rechercher", showFind) {
+                        commitEdit()
+                        showFind = !showFind
                     }
                     ToolToggle(Icons.Filled.FormatBold, "Gras", format.bold) {
                         updateFormat { it.copy(bold = !it.bold) }
@@ -534,6 +748,7 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                         updateFormat { it.copy(align = 3) }
                     }
                     ToolToggle(Icons.Filled.DeleteSweep, "Effacer la cellule") {
+                        pushUndo()
                         cells.remove(selected)
                         formats.remove(selected)
                         editing = ""
@@ -542,13 +757,50 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                 }
             }
 
+            if (showFind) {
+                SheetFindBar(
+                    query = findQuery,
+                    replacement = findReplacement,
+                    occurrences = cells.values.count { it.contains(findQuery, ignoreCase = true) && findQuery.isNotEmpty() },
+                    onQueryChange = { findQuery = it },
+                    onReplacementChange = { findReplacement = it },
+                    onFind = {
+                        val next = findNext()
+                        if (next == null) notice = "Recherche" to "« $findQuery » est introuvable dans cette feuille."
+                        else goTo(next)
+                    },
+                    onReplace = {
+                        val current = cells[selected]
+                        if (findQuery.isNotEmpty() && current != null && current.contains(findQuery, ignoreCase = true)) {
+                            pushUndo()
+                            cells[selected] = current.replace(findQuery, findReplacement, ignoreCase = true)
+                            editing = cells[selected].orEmpty()
+                        }
+                        findNext()?.let { goTo(it) }
+                    },
+                    onReplaceAll = {
+                        val hits = cells.filterValues { findQuery.isNotEmpty() && it.contains(findQuery, ignoreCase = true) }
+                        if (hits.isEmpty()) {
+                            notice = "Remplacement" to "« $findQuery » est introuvable dans cette feuille."
+                        } else {
+                            pushUndo()
+                            hits.forEach { (key, value) -> cells[key] = value.replace(findQuery, findReplacement, ignoreCase = true) }
+                            editing = cells[selected].orEmpty()
+                            notice = "Remplacement" to
+                                if (hits.size == 1) "1 cellule modifiée." else "${hits.size} cellules modifiées."
+                        }
+                    },
+                    onClose = { showFind = false }
+                )
+            }
+
             // --- En-tête des colonnes ---
             Row(modifier = Modifier.fillMaxWidth()) {
                 HeaderCell("", HEADER_WIDTH)
+                if (freezeColumn) HeaderCell("A", CELL_WIDTH, selectedColumn() == 0)
                 Row(modifier = Modifier.horizontalScroll(hScroll)) {
-                    for (c in 0 until columns) {
-                        val isActive = FormulaEngine.columnIndex(selected.takeWhile { it.isLetter() }) == c
-                        HeaderCell(FormulaEngine.columnLabel(c), CELL_WIDTH, isActive)
+                    for (c in (if (freezeColumn) 1 else 0) until columns) {
+                        HeaderCell(FormulaEngine.columnLabel(c), CELL_WIDTH, selectedColumn() == c)
                     }
                 }
             }
@@ -556,26 +808,10 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
             // --- Grille, avec les graphiques posés par-dessus ---
             Box(modifier = Modifier.fillMaxSize().clipToBounds()) {
                 LazyColumn(state = gridState, modifier = Modifier.fillMaxSize()) {
-                    items(rows) { r ->
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            val rowActive = selected.dropWhile { it.isLetter() }.toIntOrNull() == r + 1
-                            HeaderCell("${r + 1}", HEADER_WIDTH, rowActive)
-                            Row(modifier = Modifier.horizontalScroll(hScroll)) {
-                                for (c in 0 until columns) {
-                                    val key = FormulaEngine.cellKey(r, c)
-                                    GridCell(
-                                        value = FormulaEngine.displayValue(key, cells),
-                                        format = formats[key] ?: CellFormat(),
-                                        isSelected = key == selected,
-                                        onClick = {
-                                            commitEdit()
-                                            selected = key
-                                            selectedChartId = null
-                                        }
-                                    )
-                                }
-                            }
-                        }
+                    // Une ligne figée reste en haut pendant que les autres défilent.
+                    if (freezeRow) stickyHeader(key = "ligne-figee") { GridRow(0) }
+                    items(if (freezeRow) (rows - 1).coerceAtLeast(0) else rows) { index ->
+                        GridRow(if (freezeRow) index + 1 else index)
                     }
                 }
 
@@ -586,7 +822,7 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                 charts.forEach { chart ->
                     FloatingChart(
                         chart = chart,
-                        entries = buildChartEntries(chart.labelsRange, chart.valuesRange, cells),
+                        entries = buildChartEntries(chart.labelsRange, chart.valuesRange, engine),
                         selected = chart.id == selectedChartId,
                         screenX = with(density) { chart.x.dp.toPx() } - hScroll.value,
                         screenY = with(density) { chart.y.dp.toPx() } - scrollY,
@@ -609,6 +845,7 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
                         },
                         onEdit = { editingChart = chart; showChart = true },
                         onDelete = {
+                            pushUndo()
                             charts.removeAll { it.id == chart.id }
                             selectedChartId = null
                         }
@@ -618,11 +855,99 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
         }
     }
 
+    // ------------------------------------------------------------ feuilles
+
+    if (sheetMenuFor >= 0) {
+        val index = sheetMenuFor
+        val actions = buildList {
+            add("Renommer…")
+            add("Dupliquer")
+            if (index > 0) add("Déplacer vers la gauche")
+            if (index < sheets.lastIndex) add("Déplacer vers la droite")
+            if (sheets.size > 1) add("Supprimer…")
+        }
+        ListPickerDialog(
+            title = sheets.getOrNull(index)?.name ?: "Feuille",
+            items = actions,
+            label = { it },
+            onPick = { action ->
+                sheetMenuFor = -1
+                commitEdit()
+                when (action) {
+                    "Renommer…" -> renameSheetIndex = index
+                    "Dupliquer" -> {
+                        pushUndo()
+                        syncActive()
+                        val source = sheets[index]
+                        val copyName = WorkbookOps.uniqueName(sheets, source.name.take(24) + " copie ").trim()
+                        sheets.add(index + 1, source.copy(name = copyName))
+                        showSheet(index + 1)
+                    }
+                    "Déplacer vers la gauche", "Déplacer vers la droite" -> {
+                        pushUndo()
+                        syncActive()
+                        val target = if (action.endsWith("gauche")) index - 1 else index + 1
+                        val moved = sheets.removeAt(index)
+                        sheets.add(target, moved)
+                        showSheet(target)
+                    }
+                    "Supprimer…" -> deleteSheetIndex = index
+                }
+            },
+            onDismiss = { sheetMenuFor = -1 }
+        )
+    }
+
+    if (renameSheetIndex >= 0) {
+        val index = renameSheetIndex
+        TextInputDialog(
+            title = "Renommer la feuille",
+            initialValue = sheets.getOrNull(index)?.name.orEmpty(),
+            onConfirm = { name ->
+                syncActive()
+                val problem = WorkbookOps.validName(sheets, index, name)
+                if (problem != null) {
+                    notice = "Nom refusé" to problem
+                } else {
+                    pushUndo()
+                    // Les formules qui visaient l'ancien nom suivent le renommage.
+                    val renamed = WorkbookOps.rename(sheets.toList(), index, name.trim())
+                    val current = active
+                    sheets.clear(); sheets.addAll(renamed)
+                    showSheet(current)
+                }
+                renameSheetIndex = -1
+            },
+            onDismiss = { renameSheetIndex = -1 }
+        )
+    }
+
+    if (deleteSheetIndex >= 0) {
+        val index = deleteSheetIndex
+        ConfirmDialog(
+            title = "Supprimer « ${sheets.getOrNull(index)?.name.orEmpty()} » ?",
+            message = "La feuille et son contenu seront supprimés. Le bouton Annuler permet de revenir en arrière.",
+            onConfirm = {
+                if (sheets.size > 1 && index in sheets.indices) {
+                    pushUndo()
+                    syncActive()
+                    sheets.removeAt(index)
+                    showSheet(index.coerceAtMost(sheets.lastIndex))
+                }
+                deleteSheetIndex = -1
+            },
+            onDismiss = { deleteSheetIndex = -1 }
+        )
+    }
+
+    // ------------------------------------------------------------ dialogues
+
     if (showCalculator) {
         CalculatorDialog(
-            cells = cells,
+            cells = engine,
             selectedCell = selected,
             onInsert = { value ->
+                pushUndo()
                 editing = value
                 cells[selected] = value
                 showCalculator = false
@@ -632,15 +957,14 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
     }
 
     if (showChart) {
-        val lastUsedRow = (0 until rows).lastOrNull { r ->
-            (0 until columns).any { c -> cells[FormulaEngine.cellKey(r, c)]?.isNotBlank() == true }
-        } ?: 5
+        val lastUsedRow = cells.keys.mapNotNull { CellRefRow(it) }.maxOrNull() ?: 5
         ChartDialog(
-            cells = cells,
+            cells = engine,
             initial = editingChart,
             defaultLabelsRange = "A1:A${lastUsedRow + 1}",
             defaultValuesRange = "B1:B${lastUsedRow + 1}",
             onConfirm = { type, title, labelsRange, valuesRange ->
+                pushUndo()
                 val existing = editingChart
                 if (existing == null) {
                     val chart = EmbeddedChart(
@@ -733,9 +1057,11 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
     if (showClearAll) {
         ConfirmDialog(
             title = "Tout effacer ?",
-            message = "Toutes les cellules et leur mise en forme seront supprimées.",
+            message = "Toutes les cellules et leur mise en forme de cette feuille seront supprimées. " +
+                "Le bouton Annuler permet de revenir en arrière.",
             confirmLabel = "Effacer",
             onConfirm = {
+                pushUndo()
                 cells.clear(); formats.clear(); editing = ""
                 showClearAll = false
             },
@@ -759,6 +1085,106 @@ fun SpreadsheetScreen(onBack: () -> Unit, initialDocId: String? = null) {
             onConfirm = { notice = null },
             onDismiss = { notice = null }
         )
+    }
+}
+
+/** Numéro de ligne (à partir de 0) d'une référence `B12`, ou `null`. */
+private fun CellRefRow(key: String): Int? = key.dropWhile { it.isLetter() }.toIntOrNull()?.minus(1)
+
+/** Les onglets des feuilles, au bas de l'écran, comme dans Excel. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SheetTabs(
+    names: List<String>,
+    active: Int,
+    onSelect: (Int) -> Unit,
+    onMenu: (Int) -> Unit,
+    onAdd: () -> Unit
+) {
+    Surface(tonalElevation = 2.dp) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                names.forEachIndexed { index, name ->
+                    val selected = index == active
+                    Box(
+                        modifier = Modifier
+                            .padding(horizontal = 2.dp, vertical = 4.dp)
+                            .background(
+                                if (selected) MaterialTheme.colorScheme.surface else Color.Transparent,
+                                MaterialTheme.shapes.small
+                            )
+                            .border(
+                                if (selected) 1.dp else 0.dp,
+                                if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                MaterialTheme.shapes.small
+                            )
+                            .combinedClickable(
+                                onClick = { if (selected) onMenu(index) else onSelect(index) },
+                                onLongClick = { onMenu(index) }
+                            )
+                            .padding(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            name,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+            IconButton(onClick = onAdd) {
+                Icon(Icons.Filled.Add, contentDescription = "Nouvelle feuille")
+            }
+        }
+    }
+}
+
+@Composable
+private fun SheetFindBar(
+    query: String,
+    replacement: String,
+    occurrences: Int,
+    onQueryChange: (String) -> Unit,
+    onReplacementChange: (String) -> Unit,
+    onFind: () -> Unit,
+    onReplace: () -> Unit,
+    onReplaceAll: () -> Unit,
+    onClose: () -> Unit
+) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    placeholder = { Text("Rechercher") },
+                    supportingText = { Text(if (query.isEmpty()) " " else "$occurrences cellule(s)") }
+                )
+                TextButton(onClick = onFind) { Text("Suivant") }
+                IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Fermer la recherche") }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = replacement,
+                    onValueChange = onReplacementChange,
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    placeholder = { Text("Remplacer par") }
+                )
+                TextButton(onClick = onReplace) { Text("Remplacer") }
+                TextButton(onClick = onReplaceAll) { Text("Tout") }
+            }
+        }
     }
 }
 
