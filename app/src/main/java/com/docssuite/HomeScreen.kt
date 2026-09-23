@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.SendToMobile
 import androidx.compose.material.icons.filled.Slideshow
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.TableChart
@@ -79,6 +80,7 @@ fun HomeScreen(
     onOpenPdf: (PdfPayload?) -> Unit,
     onOpenMedia: () -> Unit,
     onOpenConverter: () -> Unit,
+    onOpenTransfer: () -> Unit,
     incomingFile: Uri? = null,
     onIncomingHandled: () -> Unit = {}
 ) {
@@ -249,6 +251,15 @@ fun HomeScreen(
                     Icons.Filled.SwapHoriz,
                     Color(0xFF4F46E5),
                     onClick = onOpenConverter
+                )
+            }
+            item {
+                AppCard(
+                    "Transfert d'appareil à appareil",
+                    "Tout type de fichier, par Wi-Fi, Wi-Fi Direct ou câble",
+                    Icons.Filled.SendToMobile,
+                    Color(0xFF0F766E),
+                    onClick = onOpenTransfer
                 )
             }
 

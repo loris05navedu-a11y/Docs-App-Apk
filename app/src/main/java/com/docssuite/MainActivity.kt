@@ -28,6 +28,7 @@ import com.docssuite.presentation.PresentationScreen
 import com.docssuite.spreadsheet.SpreadsheetScreen
 import com.docssuite.texteditor.TextEditorScreen
 import com.docssuite.texteditor.saveImportedTextDocument
+import com.docssuite.transfer.ui.TransferScreen
 import com.docssuite.ui.theme.DocsSuiteTheme
 
 class MainActivity : ComponentActivity() {
@@ -113,6 +114,7 @@ fun DocsSuiteApp(
                 onOpenPdf = ::openPdf,
                 onOpenMedia = { navController.navigate("media") },
                 onOpenConverter = { navController.navigate("converter") },
+                onOpenTransfer = { navController.navigate("transfer") },
                 incomingFile = incomingFile,
                 onIncomingHandled = onIncomingHandled
             )
@@ -147,6 +149,9 @@ fun DocsSuiteApp(
         }
         composable("converter") {
             FileConverterScreen(onBack = { navController.popBackStack() })
+        }
+        composable("transfer") {
+            TransferScreen(onBack = { navController.popBackStack() })
         }
     }
 }

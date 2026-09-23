@@ -11,8 +11,8 @@ android {
         applicationId "com.docssuite"
         minSdk 24
         targetSdk 35
-        versionCode 3
-        versionName "3.0.0"
+        versionCode 4
+        versionName "3.1.0"
     }
 
     buildTypes {
@@ -53,4 +53,5 @@ dependencies {
     implementation project(':modules:pdf')
     implementation project(':modules:media')
     implementation project(':modules:converter')
+    implementation project(':modules:transfer')
 }

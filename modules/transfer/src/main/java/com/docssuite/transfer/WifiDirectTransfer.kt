@@ -9,6 +9,7 @@ import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pDeviceList
 import android.net.wifi.p2p.WifiP2pInfo
 import android.net.wifi.p2p.WifiP2pManager
+import androidx.core.content.ContextCompat
 
 /**
  * Connexion directe entre deux appareils, sans routeur ni réseau Wi-Fi
@@ -60,7 +61,10 @@ class WifiDirectPeers(context: Context) {
             }
         }
         receiver = br
-        appContext.registerReceiver(br, filter)
+        // Sur Android 13+, un récepteur enregistré dynamiquement doit dire
+        // explicitement s'il est exporté ; ces diffusions viennent du
+        // système, aucune autre application n'a besoin de les recevoir ici.
+        ContextCompat.registerReceiver(appContext, br, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
 
         // Un appareil sans matériel Wi-Fi Direct actif peut lever une
         // exception ici plutôt que d'appeler onFailure : ce n'est pas un
