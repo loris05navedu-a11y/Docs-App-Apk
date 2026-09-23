@@ -28,19 +28,34 @@ class WifiDirectPeers(context: Context) {
     /**
      * Écoute les appareils Wi-Fi Direct à proximité. [onPeersChanged] est
      * rappelé avec la liste complète à chaque changement, tant que
-     * [stopDiscovery] n'a pas été appelé.
+     * [stopDiscovery] n'a pas été appelé. [onConnected] est rappelé dès
+     * qu'un groupe se forme (que ce soit après [connect] ou parce que
+     * l'autre appareil a accepté la demande) avec qui en est l'hôte.
      */
-    fun startDiscovery(onPeersChanged: (List<WifiP2pDevice>) -> Unit, onFailure: (String) -> Unit = {}) {
+    fun startDiscovery(
+        onPeersChanged: (List<WifiP2pDevice>) -> Unit,
+        onConnected: (isGroupOwner: Boolean, groupOwnerAddress: String?) -> Unit = { _, _ -> },
+        onFailure: (String) -> Unit = {}
+    ) {
         val mgr = manager ?: return onFailure("Wi-Fi Direct indisponible sur cet appareil")
         val ch = channel ?: return onFailure("Wi-Fi Direct indisponible sur cet appareil")
 
         stopDiscovery()
-        val filter = IntentFilter(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION)
+        val filter = IntentFilter().apply {
+            addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION)
+            addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION)
+        }
         val br = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, intent: Intent) {
-                if (intent.action != WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION) return
-                runCatching {
-                    mgr.requestPeers(ch) { list: WifiP2pDeviceList -> onPeersChanged(list.deviceList.toList()) }
+                when (intent.action) {
+                    WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION -> runCatching {
+                        mgr.requestPeers(ch) { list: WifiP2pDeviceList -> onPeersChanged(list.deviceList.toList()) }
+                    }
+                    WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION -> runCatching {
+                        mgr.requestConnectionInfo(ch) { info: WifiP2pInfo ->
+                            if (info.groupFormed) onConnected(info.isGroupOwner, info.groupOwnerAddress?.hostAddress)
+                        }
+                    }
                 }
             }
         }
