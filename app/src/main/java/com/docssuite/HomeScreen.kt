@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FileCopy
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.TextSnippet
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.ManageSearch
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.FolderOpen
@@ -92,6 +93,7 @@ fun HomeScreen(
     onOpenLibrary: () -> Unit,
     onOpenBackup: () -> Unit,
     onOpenOcr: () -> Unit,
+    onOpenRecorder: () -> Unit,
     incomingFile: Uri? = null,
     onIncomingHandled: () -> Unit = {}
 ) {
@@ -237,6 +239,15 @@ fun HomeScreen(
                     Icons.Filled.PictureAsPdf,
                     Color(0xFFDC2626)
                 ) { onOpenPdf(null) }
+            }
+            item {
+                AppCard(
+                    "Dictaphone et dictée",
+                    "Enregistrer un cours, écran éteint · dicter un texte à la voix",
+                    Icons.Filled.Mic,
+                    Color(0xFFDC2626),
+                    onClick = onOpenRecorder
+                )
             }
             item {
                 AppCard(

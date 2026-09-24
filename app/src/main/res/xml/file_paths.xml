@@ -8,4 +8,6 @@
     <!-- Photos dont on lit le texte. -->
     <cache-path name="ocr" path="ocr/" />
     <files-path name="conversions" path="conversions/" />
+    <!-- Enregistrements du dictaphone, pour les partager. -->
+    <files-path name="enregistrements" path="recordings/" />
 </paths>

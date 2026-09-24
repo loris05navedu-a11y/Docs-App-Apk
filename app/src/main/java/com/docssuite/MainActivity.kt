@@ -22,6 +22,7 @@ import com.docssuite.fileformats.TextDocument
 import com.docssuite.library.LibraryScreen
 import com.docssuite.backup.BackupScreen
 import com.docssuite.ocr.OcrScreen
+import com.docssuite.recorder.RecorderScreen
 import com.docssuite.core.DocType
 import com.docssuite.fileformats.TextParagraph
 import com.docssuite.fileformats.TextRun
@@ -126,6 +127,7 @@ fun DocsSuiteApp(
                 onOpenLibrary = { navController.navigate("library") },
                 onOpenBackup = { navController.navigate("backup") },
                 onOpenOcr = { navController.navigate("ocr") },
+                onOpenRecorder = { navController.navigate("recorder") },
                 incomingFile = incomingFile,
                 onIncomingHandled = onIncomingHandled
             )
@@ -163,6 +165,12 @@ fun DocsSuiteApp(
         }
         composable("transfer") {
             TransferScreen(onBack = { navController.popBackStack() })
+        }
+        composable("recorder") {
+            RecorderScreen(
+                onBack = { navController.popBackStack() },
+                onCreateDocument = { title, text -> openExtractedText(title, text) }
+            )
         }
         composable("ocr") {
             OcrScreen(
