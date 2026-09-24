@@ -20,6 +20,7 @@ import com.docssuite.converter.ui.FileConverterScreen
 import com.docssuite.core.DocumentStorage
 import com.docssuite.fileformats.TextDocument
 import com.docssuite.library.LibraryScreen
+import com.docssuite.backup.BackupScreen
 import com.docssuite.core.DocType
 import com.docssuite.fileformats.TextParagraph
 import com.docssuite.fileformats.TextRun
@@ -122,6 +123,7 @@ fun DocsSuiteApp(
                 onOpenScanner = { navController.navigate("scanner") },
                 onOpenPdfTools = { navController.navigate("pdftools") },
                 onOpenLibrary = { navController.navigate("library") },
+                onOpenBackup = { navController.navigate("backup") },
                 incomingFile = incomingFile,
                 onIncomingHandled = onIncomingHandled
             )
@@ -159,6 +161,9 @@ fun DocsSuiteApp(
         }
         composable("transfer") {
             TransferScreen(onBack = { navController.popBackStack() })
+        }
+        composable("backup") {
+            BackupScreen(onBack = { navController.popBackStack() })
         }
         composable("library") {
             LibraryScreen(

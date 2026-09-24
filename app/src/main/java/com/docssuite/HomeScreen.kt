@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FileCopy
+import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.ManageSearch
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.FolderOpen
@@ -88,6 +89,7 @@ fun HomeScreen(
     onOpenScanner: () -> Unit,
     onOpenPdfTools: () -> Unit,
     onOpenLibrary: () -> Unit,
+    onOpenBackup: () -> Unit,
     incomingFile: Uri? = null,
     onIncomingHandled: () -> Unit = {}
 ) {
@@ -294,6 +296,16 @@ fun HomeScreen(
                     Icons.Filled.SendToMobile,
                     Color(0xFF0F766E),
                     onClick = onOpenTransfer
+                )
+            }
+
+            item {
+                AppCard(
+                    "Sauvegarde",
+                    "Tous tes documents dans un fichier, et les retrouver sur un autre téléphone",
+                    Icons.Filled.Backup,
+                    Color(0xFF1D4ED8),
+                    onClick = onOpenBackup
                 )
             }
 
