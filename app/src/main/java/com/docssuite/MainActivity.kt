@@ -24,6 +24,7 @@ import com.docssuite.fileformats.TextRun
 import com.docssuite.media.MediaPlayerScreen
 import com.docssuite.pdf.PdfPayload
 import com.docssuite.pdf.PdfViewerScreen
+import com.docssuite.pdftools.ui.PdfToolsScreen
 import com.docssuite.presentation.PresentationScreen
 import com.docssuite.scanner.ui.ScannerScreen
 import com.docssuite.spreadsheet.SpreadsheetScreen
@@ -117,6 +118,7 @@ fun DocsSuiteApp(
                 onOpenConverter = { navController.navigate("converter") },
                 onOpenTransfer = { navController.navigate("transfer") },
                 onOpenScanner = { navController.navigate("scanner") },
+                onOpenPdfTools = { navController.navigate("pdftools") },
                 incomingFile = incomingFile,
                 onIncomingHandled = onIncomingHandled
             )
@@ -154,6 +156,12 @@ fun DocsSuiteApp(
         }
         composable("transfer") {
             TransferScreen(onBack = { navController.popBackStack() })
+        }
+        composable("pdftools") {
+            PdfToolsScreen(
+                onBack = { navController.popBackStack() },
+                onOpenPdf = { name, bytes -> openPdf(PdfPayload(name, bytes)) }
+            )
         }
         composable("scanner") {
             ScannerScreen(

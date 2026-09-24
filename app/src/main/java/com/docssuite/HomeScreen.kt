@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.FileCopy
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PictureAsPdf
@@ -83,6 +84,7 @@ fun HomeScreen(
     onOpenConverter: () -> Unit,
     onOpenTransfer: () -> Unit,
     onOpenScanner: () -> Unit,
+    onOpenPdfTools: () -> Unit,
     incomingFile: Uri? = null,
     onIncomingHandled: () -> Unit = {}
 ) {
@@ -245,6 +247,15 @@ fun HomeScreen(
                     Icons.Filled.DocumentScanner,
                     Color(0xFFB45309),
                     onClick = onOpenScanner
+                )
+            }
+            item {
+                AppCard(
+                    "Outils PDF",
+                    "Fusionner, réordonner, tourner, extraire des pages — sans perte",
+                    Icons.Filled.FileCopy,
+                    Color(0xFFBE123C),
+                    onClick = onOpenPdfTools
                 )
             }
             item {
