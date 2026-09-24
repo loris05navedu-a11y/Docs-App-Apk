@@ -3,5 +3,7 @@
     <!-- Seuls ces dossiers sont exposés : les fichiers que l'app vient de
          produire, à l'export ou à la conversion. -->
     <cache-path name="partage" path="partage/" />
+    <!-- Où l'appareil photo écrit la page que l'on scanne. -->
+    <cache-path name="scans" path="scans/" />
     <files-path name="conversions" path="conversions/" />
 </paths>

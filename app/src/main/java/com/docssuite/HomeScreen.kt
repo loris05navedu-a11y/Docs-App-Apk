@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.PlayCircle
@@ -81,6 +82,7 @@ fun HomeScreen(
     onOpenMedia: () -> Unit,
     onOpenConverter: () -> Unit,
     onOpenTransfer: () -> Unit,
+    onOpenScanner: () -> Unit,
     incomingFile: Uri? = null,
     onIncomingHandled: () -> Unit = {}
 ) {
@@ -234,6 +236,15 @@ fun HomeScreen(
                     "Ouvrir et convertir",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
+                )
+            }
+            item {
+                AppCard(
+                    "Scanner de documents",
+                    "Photographier une feuille, la redresser et en faire un PDF",
+                    Icons.Filled.DocumentScanner,
+                    Color(0xFFB45309),
+                    onClick = onOpenScanner
                 )
             }
             item {
