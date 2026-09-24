@@ -31,6 +31,7 @@ import com.docssuite.media.MediaPlayerScreen
 import com.docssuite.pdf.PdfPayload
 import com.docssuite.pdf.PdfViewerScreen
 import com.docssuite.pdftools.ui.PdfToolsScreen
+import com.docssuite.pdftools.ui.PdfSignScreen
 import com.docssuite.presentation.PresentationScreen
 import com.docssuite.scanner.ui.ScannerScreen
 import com.docssuite.spreadsheet.SpreadsheetScreen
@@ -130,6 +131,7 @@ fun DocsSuiteApp(
                 onOpenOcr = { navController.navigate("ocr") },
                 onOpenRecorder = { navController.navigate("recorder") },
                 onOpenTasks = { navController.navigate("tasks") },
+                onOpenPdfSign = { navController.navigate("pdfsign") },
                 incomingFile = incomingFile,
                 onIncomingHandled = onIncomingHandled
             )
@@ -167,6 +169,12 @@ fun DocsSuiteApp(
         }
         composable("transfer") {
             TransferScreen(onBack = { navController.popBackStack() })
+        }
+        composable("pdfsign") {
+            PdfSignScreen(
+                onBack = { navController.popBackStack() },
+                onOpenPdf = { name, bytes -> openPdf(PdfPayload(name, bytes)) }
+            )
         }
         composable("tasks") {
             TasksScreen(onBack = { navController.popBackStack() })

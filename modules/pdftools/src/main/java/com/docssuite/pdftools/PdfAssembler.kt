@@ -4,8 +4,16 @@ import java.io.ByteArrayOutputStream
 import java.util.IdentityHashMap
 import java.util.Locale
 
-/** Une page du document produit : laquelle, de quel fichier, et combien de quarts de tour en plus. */
-data class PageSelection(val source: PdfFile, val pageIndex: Int, val extraQuarterTurns: Int = 0)
+/**
+ * Une page du document produit : laquelle, de quel fichier, combien de
+ * quarts de tour en plus, et ce qu'on y ajoute (signature, texte, coches).
+ */
+data class PageSelection(
+    val source: PdfFile,
+    val pageIndex: Int,
+    val extraQuarterTurns: Int = 0,
+    val overlay: List<OverlayItem> = emptyList()
+)
 
 /**
  * Construit un nouveau PDF à partir de pages prises dans un ou plusieurs
@@ -78,8 +86,9 @@ object PdfAssembler {
             else -> obj
         }
 
-        newPages.forEach { (placed, extraTurns) ->
+        newPages.forEachIndexed { index, (placed, extraTurns) ->
             val (state, page, num) = placed
+            val overlay = selection[index].overlay
             val dict = page.dict.copy()
             listOf("Parent", "B", "StructParents").forEach { dict.remove(it) }
             (state.file.resolve(dict["Annots"]) as? PdfArray)?.let { annots ->
@@ -91,9 +100,49 @@ object PdfAssembler {
             val original = (state.file.resolve(page.attribute("Rotate")) as? PdfNumber)?.intValue ?: 0
             val rotation = Math.floorMod(original + 90 * extraTurns, 360) / 90 * 90
             if (rotation != 0 || dict["Rotate"] != null) dict["Rotate"] = PdfNumber.of(rotation)
+            if (overlay.isNotEmpty()) {
+                // Ressources propres à cette page : on y ajoute nos polices et
+                // images sans toucher à celles, peut-être partagées, d'origine.
+                val resources = (state.file.resolve(dict["Resources"]) as? PdfDict)?.copy() ?: PdfDict()
+                listOf("Font", "XObject").forEach { key ->
+                    resources[key] = (state.file.resolve(resources[key]) as? PdfDict)?.copy() ?: PdfDict()
+                }
+                dict["Resources"] = resources
+            }
             val copy = transform(state, dict) as PdfDict
             copy["Parent"] = PdfRef(PAGE_TREE, 0)
             copy["Type"] = PdfName("Page")
+            if (overlay.isNotEmpty()) {
+                val built = OverlayWriter.build(PageGeometry.of(state.file, page, rotation), overlay)
+                val resources = copy["Resources"] as PdfDict
+                (resources["Font"] as PdfDict).apply {
+                    set(OverlayWriter.FONT, OverlayWriter.helvetica())
+                    set(OverlayWriter.CHECK_FONT, OverlayWriter.zapf())
+                }
+                val xobjects = resources["XObject"] as PdfDict
+                built.images.forEach { (name, image) ->
+                    val (rgb, alpha) = OverlayWriter.imageStreams(image)
+                    val maskNum = allocate()
+                    objects[maskNum] = alpha
+                    rgb.dict["SMask"] = PdfRef(maskNum, 0)
+                    val imageNum = allocate()
+                    objects[imageNum] = rgb
+                    xobjects[name] = PdfRef(imageNum, 0)
+                }
+                // Le contenu d'origine est encadré par q … Q : s'il laisse l'état
+                // graphique modifié (repère déplacé, couleur…), nos ajouts n'en
+                // héritent pas et tombent exactement là où on les a posés.
+                val before = allocate()
+                objects[before] = PdfStream(PdfDict(), "q\n".toByteArray(Charsets.ISO_8859_1))
+                val after = allocate()
+                objects[after] = PdfStream(PdfDict(), "\nQ\n".toByteArray(Charsets.ISO_8859_1) + built.content)
+                val original = when (val contents = copy["Contents"]) {
+                    is PdfArray -> contents.items
+                    null, PdfNull -> emptyList()
+                    else -> listOf(contents)
+                }
+                copy["Contents"] = PdfArray((listOf<PdfObject>(PdfRef(before, 0)) + original + PdfRef(after, 0)).toMutableList())
+            }
             objects[num] = copy
         }
 

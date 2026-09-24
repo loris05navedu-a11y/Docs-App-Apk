@@ -35,6 +35,10 @@ android {
                 // Captures d'écran à la demande : ./gradlew … -Pscreenshots=dossier
                 if (project.hasProperty('screenshots')) {
                     systemProperty 'screenshots', project.property('screenshots')
+                    // En mode captures, une JVM neuve par classe : dessiner les
+                    // écrans en graphisme natif laisse à Robolectric un état qui
+                    // bloque l'attente d'inactivité d'un test d'écran suivant.
+                    forkEvery 1
                 }
             }
         }

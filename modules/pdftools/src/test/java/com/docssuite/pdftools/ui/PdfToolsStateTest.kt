@@ -26,7 +26,13 @@ class PdfToolsStateTest {
 
     private val context: Context get() = ApplicationProvider.getApplicationContext()
 
-    private fun newState() = PdfToolsState(context, CoroutineScope(SupervisorJob() + Dispatchers.Main))
+    private val created = ArrayList<PdfToolsState>()
+
+    private fun newState() = PdfToolsState(context, CoroutineScope(SupervisorJob() + Dispatchers.Main)).also { created.add(it) }
+
+    /** Chaque état ouvre des lecteurs PDF : on les referme pour ne rien laisser aux tests suivants. */
+    @org.junit.After
+    fun closeStates() = created.forEach { it.dispose() }
 
     private fun uri(name: String): Uri {
         val file = File(context.filesDir, "docs/$name").apply { parentFile!!.mkdirs(); writeBytes(PdfTestFiles.bytes(name)) }

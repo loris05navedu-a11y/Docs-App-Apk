@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.TextSnippet
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.ManageSearch
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.FolderOpen
@@ -96,6 +97,7 @@ fun HomeScreen(
     onOpenOcr: () -> Unit,
     onOpenRecorder: () -> Unit,
     onOpenTasks: () -> Unit,
+    onOpenPdfSign: () -> Unit,
     incomingFile: Uri? = null,
     onIncomingHandled: () -> Unit = {}
 ) {
@@ -294,6 +296,15 @@ fun HomeScreen(
                     Icons.Filled.TextSnippet,
                     Color(0xFF0D9488),
                     onClick = onOpenOcr
+                )
+            }
+            item {
+                AppCard(
+                    "Signer un PDF",
+                    "Signature au doigt, nom, date et coches — sans imprimer",
+                    Icons.Filled.Draw,
+                    Color(0xFF1E3A8A),
+                    onClick = onOpenPdfSign
                 )
             }
             item {
