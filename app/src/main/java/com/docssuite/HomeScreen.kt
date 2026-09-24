@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.FileCopy
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.TextSnippet
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.ManageSearch
@@ -98,6 +99,7 @@ fun HomeScreen(
     onOpenRecorder: () -> Unit,
     onOpenTasks: () -> Unit,
     onOpenPdfSign: () -> Unit,
+    onOpenReader: () -> Unit,
     incomingFile: Uri? = null,
     onIncomingHandled: () -> Unit = {}
 ) {
@@ -260,6 +262,15 @@ fun HomeScreen(
                     Icons.Filled.Mic,
                     Color(0xFFDC2626),
                     onClick = onOpenRecorder
+                )
+            }
+            item {
+                AppCard(
+                    "Lecture à voix haute",
+                    "Écouter un cours, un PDF ou un article, la phrase lue surlignée",
+                    Icons.Filled.RecordVoiceOver,
+                    Color(0xFF0369A1),
+                    onClick = onOpenReader
                 )
             }
             item {

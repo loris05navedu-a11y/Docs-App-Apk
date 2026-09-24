@@ -24,6 +24,7 @@ import com.docssuite.backup.BackupScreen
 import com.docssuite.ocr.OcrScreen
 import com.docssuite.recorder.RecorderScreen
 import com.docssuite.tasks.TasksScreen
+import com.docssuite.reader.ReaderScreen
 import com.docssuite.core.DocType
 import com.docssuite.fileformats.TextParagraph
 import com.docssuite.fileformats.TextRun
@@ -132,6 +133,7 @@ fun DocsSuiteApp(
                 onOpenRecorder = { navController.navigate("recorder") },
                 onOpenTasks = { navController.navigate("tasks") },
                 onOpenPdfSign = { navController.navigate("pdfsign") },
+                onOpenReader = { navController.navigate("reader") },
                 incomingFile = incomingFile,
                 onIncomingHandled = onIncomingHandled
             )
@@ -175,6 +177,9 @@ fun DocsSuiteApp(
                 onBack = { navController.popBackStack() },
                 onOpenPdf = { name, bytes -> openPdf(PdfPayload(name, bytes)) }
             )
+        }
+        composable("reader") {
+            ReaderScreen(onBack = { navController.popBackStack() })
         }
         composable("tasks") {
             TasksScreen(onBack = { navController.popBackStack() })
