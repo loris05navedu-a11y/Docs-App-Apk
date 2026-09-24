@@ -76,4 +76,5 @@ dependencies {
     implementation project(':modules:recorder')
     implementation project(':modules:tasks')
     implementation project(':modules:reader')
+    implementation project(':modules:templates')
 }

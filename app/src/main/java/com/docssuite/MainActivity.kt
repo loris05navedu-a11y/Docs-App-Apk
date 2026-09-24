@@ -25,6 +25,9 @@ import com.docssuite.ocr.OcrScreen
 import com.docssuite.recorder.RecorderScreen
 import com.docssuite.tasks.TasksScreen
 import com.docssuite.reader.ReaderScreen
+import com.docssuite.templates.Built
+import com.docssuite.templates.TemplatesScreen
+import com.docssuite.spreadsheet.saveImportedWorkbook
 import com.docssuite.core.DocType
 import com.docssuite.fileformats.TextParagraph
 import com.docssuite.fileformats.TextRun
@@ -134,6 +137,7 @@ fun DocsSuiteApp(
                 onOpenTasks = { navController.navigate("tasks") },
                 onOpenPdfSign = { navController.navigate("pdfsign") },
                 onOpenReader = { navController.navigate("reader") },
+                onOpenTemplates = { navController.navigate("templates") },
                 incomingFile = incomingFile,
                 onIncomingHandled = onIncomingHandled
             )
@@ -176,6 +180,19 @@ fun DocsSuiteApp(
             PdfSignScreen(
                 onBack = { navController.popBackStack() },
                 onOpenPdf = { name, bytes -> openPdf(PdfPayload(name, bytes)) }
+            )
+        }
+        composable("templates") {
+            TemplatesScreen(
+                onBack = { navController.popBackStack() },
+                onCreate = { built ->
+                    val target = when (built) {
+                        is Built.Text -> route("text_editor", saveImportedTextDocument(storage, built.document, built.name))
+                        is Built.Sheet -> route("spreadsheet", saveImportedWorkbook(storage, built.workbook, built.name))
+                    }
+                    // Le retour depuis l'éditeur ramène à l'accueil, pas au formulaire.
+                    navController.navigate(target) { popUpTo("templates") { inclusive = true } }
+                }
             )
         }
         composable("reader") {

@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.FileCopy
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.TextSnippet
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Draw
@@ -100,6 +101,7 @@ fun HomeScreen(
     onOpenTasks: () -> Unit,
     onOpenPdfSign: () -> Unit,
     onOpenReader: () -> Unit,
+    onOpenTemplates: () -> Unit,
     incomingFile: Uri? = null,
     onIncomingHandled: () -> Unit = {}
 ) {
@@ -221,6 +223,15 @@ fun HomeScreen(
                     "Créer",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
+                )
+            }
+            item {
+                AppCard(
+                    "Modèles de documents",
+                    "CV, lettre de motivation, résiliation, facture et devis calculés, budget…",
+                    Icons.Filled.AutoAwesome,
+                    Color(0xFF0891B2),
+                    onClick = onOpenTemplates
                 )
             }
             item {
