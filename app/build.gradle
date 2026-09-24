@@ -11,8 +11,14 @@ android {
         applicationId "com.docssuite"
         minSdk 24
         targetSdk 35
-        versionCode 6
-        versionName "3.3.0"
+        versionCode 7
+        versionName "4.0.0"
+
+        // Seuls les processeurs des téléphones : les variantes x86 du moteur
+        // de reconnaissance de texte (émulateurs) doubleraient la taille de l'APK.
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a'
+        }
     }
 
     buildTypes {
@@ -33,6 +39,14 @@ android {
 
     buildFeatures {
         compose true
+    }
+
+    // Bibliothèques natives compressées dans l'APK : fichier à télécharger
+    // bien plus léger, Android les décompresse une fois à l'installation.
+    packaging {
+        jniLibs {
+            useLegacyPackaging true
+        }
     }
 
     composeOptions {
@@ -58,4 +72,5 @@ dependencies {
     implementation project(':modules:pdftools')
     implementation project(':modules:library')
     implementation project(':modules:backup')
+    implementation project(':modules:ocr')
 }

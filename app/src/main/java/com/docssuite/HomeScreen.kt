@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FileCopy
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.TextSnippet
 import androidx.compose.material.icons.filled.ManageSearch
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.FolderOpen
@@ -90,6 +91,7 @@ fun HomeScreen(
     onOpenPdfTools: () -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenBackup: () -> Unit,
+    onOpenOcr: () -> Unit,
     incomingFile: Uri? = null,
     onIncomingHandled: () -> Unit = {}
 ) {
@@ -261,6 +263,15 @@ fun HomeScreen(
                     Icons.Filled.DocumentScanner,
                     Color(0xFFB45309),
                     onClick = onOpenScanner
+                )
+            }
+            item {
+                AppCard(
+                    "Texte depuis une photo",
+                    "Récupérer le texte d'une feuille ou d'une affiche, sans le retaper",
+                    Icons.Filled.TextSnippet,
+                    Color(0xFF0D9488),
+                    onClick = onOpenOcr
                 )
             }
             item {
