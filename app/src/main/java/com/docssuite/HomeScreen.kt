@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.FileCopy
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.TextSnippet
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.ManageSearch
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.FolderOpen
@@ -94,6 +95,7 @@ fun HomeScreen(
     onOpenBackup: () -> Unit,
     onOpenOcr: () -> Unit,
     onOpenRecorder: () -> Unit,
+    onOpenTasks: () -> Unit,
     incomingFile: Uri? = null,
     onIncomingHandled: () -> Unit = {}
 ) {
@@ -192,6 +194,15 @@ fun HomeScreen(
             contentPadding = PaddingValues(20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            item {
+                AppCard(
+                    "Tâches et rappels",
+                    "« Appeler Léa demain 18h » : la tâche et son rappel en une ligne",
+                    Icons.Filled.Checklist,
+                    Color(0xFF7C3AED),
+                    onClick = onOpenTasks
+                )
+            }
             item {
                 AppCard(
                     "Mes documents",
