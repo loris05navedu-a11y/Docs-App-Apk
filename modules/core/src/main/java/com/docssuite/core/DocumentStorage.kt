@@ -56,6 +56,46 @@ class DocumentStorage(context: Context) {
 
     fun load(id: String): String? = prefs.getString(KEY_DOC + id, null)
 
+    fun meta(id: String): DocMeta? = list().firstOrNull { it.id == id }
+
+    /** Change le nom affiché, sans toucher au contenu ni à la date de modification. */
+    fun rename(id: String, name: String) {
+        val current = meta(id) ?: return
+        writeIndexEntry(current.copy(name = name.trim().ifBlank { current.name }))
+    }
+
+    /**
+     * Réécrit un document tel qu'il était, date de modification comprise :
+     * c'est ce qui permet à une restauration de savoir lequel est le plus récent.
+     */
+    fun restore(meta: DocMeta, payload: String) {
+        prefs.edit().putString(KEY_DOC + meta.id, payload).apply()
+        writeIndexEntry(meta)
+    }
+
+    private fun writeIndexEntry(meta: DocMeta) {
+        val array = JSONArray(prefs.getString(KEY_INDEX, "[]"))
+        val updated = JSONArray()
+        var replaced = false
+        val entry = JSONObject().apply {
+            put("id", meta.id)
+            put("name", meta.name)
+            put("type", meta.type.name)
+            put("updatedAt", meta.updatedAt)
+        }
+        for (i in 0 until array.length()) {
+            val o = array.getJSONObject(i)
+            if (o.getString("id") == meta.id) {
+                updated.put(entry)
+                replaced = true
+            } else {
+                updated.put(o)
+            }
+        }
+        if (!replaced) updated.put(entry)
+        prefs.edit().putString(KEY_INDEX, updated.toString()).apply()
+    }
+
     fun delete(id: String) {
         val array = JSONArray(prefs.getString(KEY_INDEX, "[]"))
         val updated = JSONArray()

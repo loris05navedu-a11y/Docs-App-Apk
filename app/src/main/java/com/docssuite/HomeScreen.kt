@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FileCopy
+import androidx.compose.material.icons.filled.ManageSearch
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PictureAsPdf
@@ -57,6 +58,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.docssuite.core.DocMeta
 import com.docssuite.core.DocType
+import com.docssuite.core.DocumentLibrary
 import com.docssuite.core.DocumentStorage
 import com.docssuite.core.readFile
 import com.docssuite.core.rememberFileOpener
@@ -85,6 +87,7 @@ fun HomeScreen(
     onOpenTransfer: () -> Unit,
     onOpenScanner: () -> Unit,
     onOpenPdfTools: () -> Unit,
+    onOpenLibrary: () -> Unit,
     incomingFile: Uri? = null,
     onIncomingHandled: () -> Unit = {}
 ) {
@@ -183,6 +186,15 @@ fun HomeScreen(
             contentPadding = PaddingValues(20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            item {
+                AppCard(
+                    "Mes documents",
+                    "Chercher un mot partout, ranger en dossiers, favoris",
+                    Icons.Filled.ManageSearch,
+                    Color(0xFF334155),
+                    onClick = onOpenLibrary
+                )
+            }
             item {
                 Text(
                     "Créer",
@@ -306,6 +318,7 @@ fun HomeScreen(
                         },
                         onDelete = {
                             storage.delete(meta.id)
+                            DocumentLibrary(context).forget(meta.id)
                             refreshKey++
                         }
                     )

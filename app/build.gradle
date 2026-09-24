@@ -56,4 +56,5 @@ dependencies {
     implementation project(':modules:transfer')
     implementation project(':modules:scanner')
     implementation project(':modules:pdftools')
+    implementation project(':modules:library')
 }

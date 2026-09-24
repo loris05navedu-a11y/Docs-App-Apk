@@ -19,6 +19,8 @@ import androidx.navigation.navArgument
 import com.docssuite.converter.ui.FileConverterScreen
 import com.docssuite.core.DocumentStorage
 import com.docssuite.fileformats.TextDocument
+import com.docssuite.library.LibraryScreen
+import com.docssuite.core.DocType
 import com.docssuite.fileformats.TextParagraph
 import com.docssuite.fileformats.TextRun
 import com.docssuite.media.MediaPlayerScreen
@@ -119,6 +121,7 @@ fun DocsSuiteApp(
                 onOpenTransfer = { navController.navigate("transfer") },
                 onOpenScanner = { navController.navigate("scanner") },
                 onOpenPdfTools = { navController.navigate("pdftools") },
+                onOpenLibrary = { navController.navigate("library") },
                 incomingFile = incomingFile,
                 onIncomingHandled = onIncomingHandled
             )
@@ -156,6 +159,19 @@ fun DocsSuiteApp(
         }
         composable("transfer") {
             TransferScreen(onBack = { navController.popBackStack() })
+        }
+        composable("library") {
+            LibraryScreen(
+                onBack = { navController.popBackStack() },
+                onOpen = { meta ->
+                    val base = when (meta.type) {
+                        DocType.TEXT -> "text_editor"
+                        DocType.SHEET -> "spreadsheet"
+                        DocType.DECK -> "presentation"
+                    }
+                    navController.navigate(route(base, meta.id))
+                }
+            )
         }
         composable("pdftools") {
             PdfToolsScreen(

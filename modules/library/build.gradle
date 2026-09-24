@@ -1,0 +1,56 @@
+plugins {
+    id 'com.android.library'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace "com.docssuite.library"
+    compileSdk 35
+
+    defaultConfig {
+        minSdk 24
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    kotlinOptions {
+        jvmTarget = "11"
+    }
+
+    buildFeatures {
+        compose true
+    }
+
+    composeOptions {
+        kotlinCompilerExtensionVersion = '1.5.0'
+    }
+
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+            all {
+                // Captures d'écran à la demande : ./gradlew … -Pscreenshots=dossier
+                if (project.hasProperty('screenshots')) {
+                    systemProperty 'screenshots', project.property('screenshots')
+                }
+            }
+        }
+    }
+}
+
+dependencies {
+    api project(':modules:core')
+
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.11.1'
+    testImplementation 'androidx.test:core:1.5.0'
+    testImplementation 'androidx.test.ext:junit:1.1.5'
+    // Le rendu d'écrans en test réclame une activité hôte, fournie par
+    // `ui-test-manifest`, qui n'existe qu'en debug : ces tests vivent donc
+    // dans `src/testDebug`.
+    testDebugImplementation 'androidx.compose.ui:ui-test-junit4'
+    debugImplementation 'androidx.compose.ui:ui-test-manifest'
+}
