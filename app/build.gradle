@@ -11,8 +11,8 @@ android {
         applicationId "com.docssuite"
         minSdk 24
         targetSdk 35
-        versionCode 9
-        versionName "4.2.0"
+        versionCode 10
+        versionName "4.3.0"
 
         // Seuls les processeurs des téléphones : les variantes x86 du moteur
         // de reconnaissance de texte (émulateurs) doubleraient la taille de l'APK.
