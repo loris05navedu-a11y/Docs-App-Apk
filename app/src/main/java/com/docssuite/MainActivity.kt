@@ -123,25 +123,11 @@ fun DocsSuiteApp(
     NavHost(navController = navController, startDestination = "home") {
         composable("home") {
             HomeScreen(
+                onNavigate = { navController.navigate(it) },
                 onOpenTextEditor = { navController.navigate(route("text_editor", it)) },
                 onOpenSpreadsheet = { navController.navigate(route("spreadsheet", it)) },
                 onOpenPresentation = { navController.navigate(route("presentation", it)) },
                 onOpenPdf = ::openPdf,
-                onOpenMedia = { navController.navigate("media") },
-                onOpenConverter = { navController.navigate("converter") },
-                onOpenTransfer = { navController.navigate("transfer") },
-                onOpenScanner = { navController.navigate("scanner") },
-                onOpenPdfTools = { navController.navigate("pdftools") },
-                onOpenLibrary = { navController.navigate("library") },
-                onOpenBackup = { navController.navigate("backup") },
-                onOpenOcr = { navController.navigate("ocr") },
-                onOpenRecorder = { navController.navigate("recorder") },
-                onOpenTasks = { navController.navigate("tasks") },
-                onOpenPdfSign = { navController.navigate("pdfsign") },
-                onOpenReader = { navController.navigate("reader") },
-                onOpenTemplates = { navController.navigate("templates") },
-                onOpenMailMerge = { navController.navigate("mailmerge") },
-                onOpenCompare = { navController.navigate("compare") },
                 incomingFile = incomingFile,
                 onIncomingHandled = onIncomingHandled
             )

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="window_background">#F8FAFC</color>
+    <color name="navigation_background">#F1F4F9</color>
+    <color name="accent">#2563EB</color>
+    <bool name="light_bars">true</bool>
+</resources>

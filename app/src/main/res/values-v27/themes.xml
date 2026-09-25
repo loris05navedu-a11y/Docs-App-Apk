@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Icônes sombres sur barre de navigation claire : possible à partir d'Android 8.1. -->
+    <style name="Theme.DocsSuite" parent="Base.Theme.DocsSuite">
+        <item name="android:navigationBarColor">@color/navigation_background</item>
+        <item name="android:windowLightNavigationBar">@bool/light_bars</item>
+    </style>
+</resources>

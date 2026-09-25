@@ -1,4 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.DocsSuite" parent="android:Theme.Material.Light" />
+    <!--
+        Chaque écran dessine sa propre barre de titre : la barre d'action du
+        système ferait doublon. La barre d'état prend la couleur du fond pour
+        que l'app ne paraisse pas coupée en deux.
+    -->
+    <style name="Base.Theme.DocsSuite" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:statusBarColor">@color/window_background</item>
+        <item name="android:windowLightStatusBar">@bool/light_bars</item>
+        <item name="android:colorAccent">@color/accent</item>
+    </style>
+
+    <style name="Theme.DocsSuite" parent="Base.Theme.DocsSuite" />
 </resources>
