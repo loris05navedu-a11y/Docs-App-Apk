@@ -24,6 +24,8 @@ import com.docssuite.backup.BackupScreen
 import com.docssuite.ocr.OcrScreen
 import com.docssuite.recorder.RecorderScreen
 import com.docssuite.tasks.TasksScreen
+import com.docssuite.compare.CompareScreen
+import com.docssuite.mailmerge.MailMergeScreen
 import com.docssuite.reader.ReaderScreen
 import com.docssuite.templates.Built
 import com.docssuite.templates.TemplatesScreen
@@ -138,6 +140,8 @@ fun DocsSuiteApp(
                 onOpenPdfSign = { navController.navigate("pdfsign") },
                 onOpenReader = { navController.navigate("reader") },
                 onOpenTemplates = { navController.navigate("templates") },
+                onOpenMailMerge = { navController.navigate("mailmerge") },
+                onOpenCompare = { navController.navigate("compare") },
                 incomingFile = incomingFile,
                 onIncomingHandled = onIncomingHandled
             )
@@ -192,6 +196,29 @@ fun DocsSuiteApp(
                     }
                     // Le retour depuis l'éditeur ramène à l'accueil, pas au formulaire.
                     navController.navigate(target) { popUpTo("templates") { inclusive = true } }
+                }
+            )
+        }
+        composable("mailmerge") {
+            MailMergeScreen(
+                onBack = { navController.popBackStack() },
+                onCreate = { letters ->
+                    val ids = letters.map { saveImportedTextDocument(storage, it.document, it.name) }
+                    // Un seul courrier s'ouvre dans l'éditeur ; toute une série
+                    // se retrouve mieux dans la liste des documents.
+                    val target = if (ids.size == 1) route("text_editor", ids.first()) else "library"
+                    navController.navigate(target) { popUpTo("mailmerge") { inclusive = true } }
+                }
+            )
+        }
+        composable("compare") {
+            CompareScreen(
+                onBack = { navController.popBackStack() },
+                onSaveReport = { report, name ->
+                    val id = saveImportedTextDocument(storage, report, name)
+                    navController.navigate(route("text_editor", id)) {
+                        popUpTo("compare") { inclusive = true }
+                    }
                 }
             )
         }

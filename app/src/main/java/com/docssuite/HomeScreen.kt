@@ -30,8 +30,10 @@ import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.ManageSearch
+import androidx.compose.material.icons.filled.Difference
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.SendToMobile
@@ -102,6 +104,8 @@ fun HomeScreen(
     onOpenPdfSign: () -> Unit,
     onOpenReader: () -> Unit,
     onOpenTemplates: () -> Unit,
+    onOpenMailMerge: () -> Unit,
+    onOpenCompare: () -> Unit,
     incomingFile: Uri? = null,
     onIncomingHandled: () -> Unit = {}
 ) {
@@ -219,6 +223,15 @@ fun HomeScreen(
                 )
             }
             item {
+                AppCard(
+                    "Comparer deux versions",
+                    "Ce qui a été ajouté, retiré ou retouché entre deux documents",
+                    Icons.Filled.Difference,
+                    Color(0xFF0D9488),
+                    onClick = onOpenCompare
+                )
+            }
+            item {
                 Text(
                     "Créer",
                     style = MaterialTheme.typography.titleMedium,
@@ -232,6 +245,15 @@ fun HomeScreen(
                     Icons.Filled.AutoAwesome,
                     Color(0xFF0891B2),
                     onClick = onOpenTemplates
+                )
+            }
+            item {
+                AppCard(
+                    "Courriers en série",
+                    "Un modèle, une liste de noms : autant de courriers personnalisés",
+                    Icons.Filled.Groups,
+                    Color(0xFF9333EA),
+                    onClick = onOpenMailMerge
                 )
             }
             item {

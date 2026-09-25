@@ -25,3 +25,14 @@ fun saveImportedTextDocument(
     storage.save(id, name, DocType.TEXT, EditorIO.toJson(EditorIO.fromTextDocument(document)))
     return id
 }
+
+/**
+ * Un document enregistré relu dans le modèle pivot, mise en forme et tableaux
+ * compris — ce dont ont besoin le publipostage et la comparaison de versions.
+ * Renvoie `null` si l'identifiant ne désigne pas un document lisible.
+ */
+fun loadTextDocument(storage: DocumentStorage, id: String): TextDocument? {
+    val meta = storage.meta(id)?.takeIf { it.type == DocType.TEXT } ?: return null
+    val payload = storage.load(id) ?: return null
+    return runCatching { EditorIO.toTextDocument(EditorIO.fromJson(payload), meta.name) }.getOrNull()
+}

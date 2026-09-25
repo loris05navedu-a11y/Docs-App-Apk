@@ -77,4 +77,6 @@ dependencies {
     implementation project(':modules:tasks')
     implementation project(':modules:reader')
     implementation project(':modules:templates')
+    implementation project(':modules:mailmerge')
+    implementation project(':modules:compare')
 }
