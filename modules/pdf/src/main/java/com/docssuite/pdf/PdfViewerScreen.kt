@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Share
@@ -38,6 +39,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -61,7 +63,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.docssuite.core.rememberFileOpener
@@ -69,6 +74,9 @@ import com.docssuite.core.safeFileName
 import com.docssuite.core.shareBytes
 import com.docssuite.fileformats.FileFormat
 import com.docssuite.fileformats.PdfText
+import com.docssuite.pdftools.PdfEncryptedException
+import com.docssuite.pdftools.PdfLock
+import com.docssuite.pdftools.PdfWrongPasswordException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -96,6 +104,11 @@ fun PdfViewerScreen(
 
     var source by remember { mutableStateOf<PdfDocumentSource?>(null) }
     var rawBytes by remember { mutableStateOf<ByteArray?>(null) }
+    /** Les octets lisibles : les mêmes, ou la copie déchiffrée d'un PDF protégé. */
+    var readable by remember { mutableStateOf<ByteArray?>(null) }
+    /** Un PDF protégé qui attend son mot de passe, et si le dernier essai était faux. */
+    var locked by remember { mutableStateOf<Pair<String, ByteArray>?>(null) }
+    var wrongPassword by remember { mutableStateOf(false) }
     var fileName by remember { mutableStateOf("") }
     var zoom by remember { mutableStateOf(1f) }
     var showMenu by remember { mutableStateOf(false) }
@@ -108,23 +121,52 @@ fun PdfViewerScreen(
         scope.launch { snackbar.showSnackbar(message) }
     }
 
-    fun load(name: String, bytes: ByteArray) {
+    /**
+     * [password] : pour un PDF protégé. Le déchiffrement se fait en mémoire ;
+     * le fichier partagé reste celui d'origine, protégé.
+     */
+    fun load(name: String, bytes: ByteArray, password: String? = null) {
         scope.launch {
             busy = true
             val opened = withContext(Dispatchers.IO) {
-                runCatching { PdfDocumentSource.open(context, bytes, name) }
+                runCatching {
+                    try {
+                        PdfDocumentSource.open(context, bytes, name) to bytes
+                    } catch (error: PdfOpenException) {
+                        if (error.cause !is SecurityException) throw error
+                        // Sans mot de passe, on essaie quand même : un PDF seulement
+                        // restreint (copie, impression) s'ouvre avec le mot de passe vide.
+                        val clear = PdfLock.unlock(bytes, password)
+                        PdfDocumentSource.open(context, clear, name) to clear
+                    }
+                }
             }
             busy = false
             opened
-                .onSuccess {
+                .onSuccess { (document, clear) ->
                     source?.close()
-                    source = it
+                    source = document
                     rawBytes = bytes
+                    readable = clear
                     fileName = name
                     zoom = 1f
+                    locked = null
+                    wrongPassword = false
                     listState.scrollToItem(0)
                 }
-                .onFailure { report(it.message ?: "Ouverture impossible") }
+                .onFailure { error ->
+                    when (error) {
+                        is PdfEncryptedException -> {
+                            locked = name to bytes
+                            wrongPassword = false
+                        }
+                        is PdfWrongPasswordException -> {
+                            locked = name to bytes
+                            wrongPassword = true
+                        }
+                        else -> report(error.message ?: "Ouverture impossible")
+                    }
+                }
         }
     }
 
@@ -209,10 +251,10 @@ fun PdfViewerScreen(
                             leadingIcon = {
                                 Icon(Icons.Filled.Description, contentDescription = null)
                             },
-                            enabled = rawBytes != null && !busy,
+                            enabled = readable != null && !busy,
                             onClick = {
                                 showMenu = false
-                                val bytes = rawBytes ?: return@DropdownMenuItem
+                                val bytes = readable ?: return@DropdownMenuItem
                                 scope.launch {
                                     busy = true
                                     val text = withContext(Dispatchers.IO) {
@@ -242,7 +284,10 @@ fun PdfViewerScreen(
                 .padding(padding)
                 .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
-            if (document == null) {
+            val waiting = locked
+            if (document == null && waiting != null) {
+                PasswordPanel(waiting.first, wrongPassword, busy) { password -> load(waiting.first, waiting.second, password) }
+            } else if (document == null) {
                 EmptyState(busy) { opener.open(arrayOf("application/pdf")) }
             } else {
                 val horizontal = rememberScrollState()
@@ -282,6 +327,40 @@ fun PdfViewerScreen(
                     CircularProgressIndicator()
                 }
             }
+        }
+    }
+}
+
+/** Un PDF protégé : on demande son mot de passe à la place de la page vide. */
+@Composable
+private fun PasswordPanel(name: String, wrong: Boolean, busy: Boolean, onSubmit: (String) -> Unit) {
+    var password by remember { mutableStateOf("") }
+    Column(
+        modifier = Modifier.fillMaxSize().padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(Icons.Filled.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.height(56.dp))
+        Text(
+            "« $name » est protégé",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 16.dp, bottom = 16.dp)
+        )
+        OutlinedTextField(
+            value = password,
+            onValueChange = { password = it },
+            label = { Text("Mot de passe") },
+            singleLine = true,
+            isError = wrong,
+            supportingText = if (wrong) ({ Text("Mot de passe incorrect") }) else null,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Button(onClick = { onSubmit(password) }, enabled = password.isNotEmpty() && !busy, modifier = Modifier.padding(top = 16.dp)) {
+            Text("Ouvrir")
         }
     }
 }

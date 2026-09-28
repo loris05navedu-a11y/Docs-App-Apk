@@ -37,6 +37,8 @@ android {
 
 dependencies {
     api project(':modules:core')
+    // PdfRenderer ne sait pas déchiffrer : un PDF protégé est ouvert avec son mot de passe par pdftools.
+    implementation project(':modules:pdftools')
 
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.robolectric:robolectric:4.11.1'

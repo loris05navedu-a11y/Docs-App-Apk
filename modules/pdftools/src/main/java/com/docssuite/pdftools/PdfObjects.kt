@@ -26,7 +26,80 @@ data class PdfNumber(val raw: String) : PdfObject {
 }
 
 /** Chaîne littérale `(…)` ou hexadécimale `<…>`, délimiteurs compris. */
-class PdfString(val raw: ByteArray) : PdfObject
+class PdfString(val raw: ByteArray) : PdfObject {
+
+    /** Les octets que la chaîne représente, échappements et hexadécimal décodés. */
+    fun bytes(): ByteArray =
+        if (raw.isNotEmpty() && raw[0] == '<'.code.toByte()) hexBytes() else literalBytes()
+
+    private fun hexBytes(): ByteArray {
+        val digits = StringBuilder()
+        for (i in 1 until raw.size) {
+            val c = raw[i].toInt().toChar()
+            if (c == '>') break
+            if (c.isLetterOrDigit()) digits.append(c)
+        }
+        // Un nombre impair de chiffres se complète d'un 0 (§ 7.3.4.3).
+        if (digits.length % 2 == 1) digits.append('0')
+        return ByteArray(digits.length / 2) { i ->
+            digits.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+        }
+    }
+
+    private fun literalBytes(): ByteArray {
+        val out = ByteArrayOutputStream(raw.size)
+        var i = 1
+        val end = raw.size - 1 // la parenthèse fermante
+        while (i < end) {
+            val c = raw[i].toInt() and 0xFF
+            if (c != '\\'.code) {
+                // Une fin de ligne dans la chaîne vaut toujours \n.
+                if (c == '\r'.code) {
+                    out.write('\n'.code)
+                    if (i + 1 < end && raw[i + 1] == '\n'.code.toByte()) i++
+                } else {
+                    out.write(c)
+                }
+                i++
+                continue
+            }
+            i++
+            if (i >= end) break
+            val e = raw[i].toInt() and 0xFF
+            when (e.toChar()) {
+                'n' -> out.write('\n'.code)
+                'r' -> out.write('\r'.code)
+                't' -> out.write('\t'.code)
+                'b' -> out.write(8)
+                'f' -> out.write(12)
+                '\r' -> if (i + 1 < end && raw[i + 1] == '\n'.code.toByte()) i++ // coupure de ligne
+                '\n' -> {}
+                in '0'..'7' -> {
+                    var value = e - '0'.code
+                    var digits = 1
+                    while (digits < 3 && i + 1 < end && (raw[i + 1].toInt() and 0xFF) in '0'.code..'7'.code) {
+                        i++
+                        value = value * 8 + ((raw[i].toInt() and 0xFF) - '0'.code)
+                        digits++
+                    }
+                    out.write(value and 0xFF)
+                }
+                else -> out.write(e)
+            }
+            i++
+        }
+        return out.toByteArray()
+    }
+
+    companion object {
+        /** Une chaîne hexadécimale : sûre quels que soient les octets. */
+        fun hex(bytes: ByteArray): PdfString {
+            val text = StringBuilder(bytes.size * 2 + 2).append('<')
+            bytes.forEach { text.append(String.format("%02X", it.toInt() and 0xFF)) }
+            return PdfString(text.append('>').toString().toByteArray(Charsets.ISO_8859_1))
+        }
+    }
+}
 
 /** Nom sans la barre oblique, avec ses éventuels échappements `#xx`. */
 data class PdfName(val raw: String) : PdfObject
@@ -52,6 +125,8 @@ class PdfFormatException(message: String) : Exception(message)
 
 class PdfEncryptedException :
     Exception("Ce PDF est protégé par un mot de passe : il ne peut pas être modifié sans être déverrouillé")
+
+class PdfWrongPasswordException : Exception("Mot de passe incorrect")
 
 /** Sérialisation, séparateurs toujours explicites pour ne jamais coller deux jetons. */
 internal fun ByteArrayOutputStream.writePdf(obj: PdfObject) {

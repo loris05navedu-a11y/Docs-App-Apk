@@ -11,6 +11,17 @@ class PdfPage(
     fun attribute(key: String): PdfObject? = dict[key] ?: inherited[key]
 }
 
+/** Comment un PDF ouvert était protégé. */
+data class PdfSecurityInfo(
+    /** « AES 256 bits », « RC4 128 bits »… */
+    val description: String,
+    /** Faux pour un PDF seulement restreint, qui s'ouvre sans mot de passe. */
+    val needsPassword: Boolean,
+    /** Vrai si le mot de passe donné est celui du propriétaire. */
+    val owner: Boolean,
+    val permissions: Int
+)
+
 /**
  * Un PDF ouvert pour être réorganisé : table des objets et liste des pages.
  *
@@ -19,13 +30,21 @@ class PdfPage(
  * la table en parcourant le fichier quand elle est fausse — cas fréquent
  * des PDF réparés ou modifiés à la main.
  */
-class PdfFile private constructor(val bytes: ByteArray) {
+class PdfFile private constructor(val bytes: ByteArray, private val password: String?) {
 
     private sealed interface Entry
     private data class InFile(val offset: Int) : Entry
     private data class InObjectStream(val stream: Int, val index: Int) : Entry
 
     private val entries = HashMap<Int, Entry>()
+    private val generations = HashMap<Int, Int>()
+    private var decryptor: PdfDecryptor? = null
+    /** Le dictionnaire de chiffrement, s'il est un objet indirect : jamais chiffré lui-même. */
+    private var encryptNum: Int? = null
+
+    /** `null` pour un PDF sans protection. */
+    var security: PdfSecurityInfo? = null
+        private set
     private val cache = HashMap<Int, PdfObject>()
     private val objectStreams = HashMap<Int, Pair<ByteArray, List<Pair<Int, Int>>>>()
     private val loading = HashSet<Int>()
@@ -69,9 +88,14 @@ class PdfFile private constructor(val bytes: ByteArray) {
         null -> null
         is InFile -> {
             val parser = PdfParser(bytes, entry.offset) { ref -> (resolve(ref) as? PdfNumber)?.intValue }
-            val (found, obj) = parser.readIndirectObject()
-            if (found != num) throw PdfFormatException("Objet $found trouvé au lieu de $num")
-            obj
+            val read = parser.readIndirectObject()
+            if (read.num != num) throw PdfFormatException("Objet ${read.num} trouvé au lieu de $num")
+            generations[num] = read.gen
+            val obj = read.obj
+            val crypt = decryptor
+            // Ni le dictionnaire de chiffrement ni les tables de références ne sont chiffrés.
+            if (crypt == null || num == encryptNum || (obj is PdfStream && obj.dict.nameOf("Type") == "XRef")) obj
+            else crypt.decrypt(obj, num, read.gen)
         }
         is InObjectStream -> {
             val (data, offsets) = objectStream(entry.stream)
@@ -148,7 +172,7 @@ class PdfFile private constructor(val bytes: ByteArray) {
     }
 
     private fun readXrefStream(offset: Int): PdfDict {
-        val (_, obj) = PdfParser(bytes, offset) { ref -> (resolve(ref) as? PdfNumber)?.intValue }.readIndirectObject()
+        val obj = PdfParser(bytes, offset) { ref -> (resolve(ref) as? PdfNumber)?.intValue }.readIndirectObject().obj
         val stream = obj as? PdfStream ?: throw PdfFormatException("Table des références compressée illisible")
         val data = PdfFilters.decode(stream, { it })
         val widths = (stream.dict["W"] as? PdfArray)?.items?.map { (it as PdfNumber).intValue }
@@ -197,16 +221,7 @@ class PdfFile private constructor(val bytes: ByteArray) {
         Regex("(?<![0-9])(\\d{1,9})[ \\t\\r\\n]+(\\d{1,5})[ \\t\\r\\n]+obj(?=[\\s<\\[(/%]|$)").findAll(text).forEach { m ->
             entries[m.groupValues[1].toInt()] = InFile(m.range.first)
         }
-        entries.keys.toList().forEach { num ->
-            val stream = runCatching { getObject(num) }.getOrNull() as? PdfStream ?: return@forEach
-            if (stream.dict.nameOf("Type") != "ObjStm") return@forEach
-            runCatching {
-                objectStream(num).second.forEachIndexed { index, (member, _) ->
-                    if (member !in entries) entries[member] = InObjectStream(num, index)
-                }
-            }
-        }
-        cache.clear()
+        scanObjectStreams()
 
         var found: PdfDict? = null
         var at = text.lastIndexOf("trailer")
@@ -228,6 +243,65 @@ class PdfFile private constructor(val bytes: ByteArray) {
             }
         }
         trailer = found
+    }
+
+    /** Ajoute à la table les membres des flux d'objets trouvés par la reconstruction. */
+    private fun scanObjectStreams() {
+        entries.keys.toList().forEach { num ->
+            val stream = runCatching { getObject(num) }.getOrNull() as? PdfStream ?: return@forEach
+            if (stream.dict.nameOf("Type") != "ObjStm") return@forEach
+            runCatching {
+                objectStream(num).second.forEachIndexed { index, (member, _) ->
+                    if (member !in entries) entries[member] = InObjectStream(num, index)
+                }
+            }
+        }
+        cache.clear()
+    }
+
+    // --------------------------------------------------------------- sécurité
+
+    /**
+     * Prépare le déchiffrement. Sans mot de passe, on essaie le mot de passe
+     * vide : il ouvre les PDF seulement restreints (impression, copie…).
+     */
+    private fun setupSecurity() {
+        decryptor = null
+        encryptNum = null
+        security = null
+        val reference = trailer["Encrypt"]
+        if (reference == null || reference == PdfNull) return
+        encryptNum = (reference as? PdfRef)?.num
+        cache.clear()
+        objectStreams.clear()
+        val dict = resolve(reference) as? PdfDict ?: throw PdfFormatException("Dictionnaire de chiffrement illisible")
+        val id = ((resolve(trailer["ID"]) as? PdfArray)?.items?.firstOrNull()?.let(::resolve) as? PdfString)?.bytes() ?: ByteArray(0)
+        val emptyWorks = PdfDecryptor.open(dict, id, null, ::resolve)
+        val opened = when {
+            password.isNullOrEmpty() -> emptyWorks ?: throw PdfEncryptedException()
+            else -> PdfDecryptor.open(dict, id, password, ::resolve) ?: throw PdfWrongPasswordException()
+        }
+        decryptor = opened
+        security = PdfSecurityInfo(opened.description, needsPassword = emptyWorks == null, owner = opened.owner, permissions = opened.permissions)
+        cache.clear()
+        objectStreams.clear()
+    }
+
+    // --------------------------------------------------------------- objets
+
+    /** Numéros des objets présents, tables de références et flux d'objets exclus. */
+    fun objectNumbers(): List<Int> = entries.entries
+        .filter { (num, entry) -> num > 0 && (entry !is InFile || entry.offset > 0) && num != encryptNum }
+        .map { it.key }
+        .filter { num ->
+            val type = (getObject(num) as? PdfStream)?.dict?.nameOf("Type")
+            type != "XRef" && type != "ObjStm"
+        }
+        .sorted()
+
+    fun generation(num: Int): Int {
+        getObject(num)
+        return generations[num] ?: 0
     }
 
     // --------------------------------------------------------------- pages
@@ -255,14 +329,22 @@ class PdfFile private constructor(val bytes: ByteArray) {
         return result
     }
 
+    private fun readable(): Boolean = runCatching {
+        val catalog = resolve(trailer["Root"]) as? PdfDict
+        catalog != null && resolve(catalog["Pages"]) is PdfDict
+    }.getOrDefault(false)
+
     private fun open() {
-        val ok = runCatching {
-            loadXref()
-            val catalog = resolve(trailer["Root"]) as? PdfDict
-            catalog != null && resolve(catalog["Pages"]) is PdfDict
-        }.getOrDefault(false)
-        if (!ok) rebuildXref()
-        if (trailer["Encrypt"] != null && trailer["Encrypt"] != PdfNull) throw PdfEncryptedException()
+        val xref = runCatching { loadXref() }.isSuccess
+        if (!xref) rebuildXref()
+        // Le catalogue d'un PDF protégé n'est lisible qu'une fois la clé connue.
+        setupSecurity()
+        if (repaired && decryptor != null) scanObjectStreams()
+        if (!readable() && !repaired) {
+            rebuildXref()
+            setupSecurity()
+            if (decryptor != null) scanObjectStreams()
+        }
         pages = collectPages()
         if (pages.isEmpty() && !repaired) {
             rebuildXref()
@@ -274,11 +356,16 @@ class PdfFile private constructor(val bytes: ByteArray) {
     companion object {
         val INHERITABLE = listOf("Resources", "MediaBox", "CropBox", "Rotate")
 
-        fun parse(bytes: ByteArray): PdfFile {
+        /**
+         * Ouvre un PDF. Protégé, il lui faut [password] — sauf s'il s'ouvre
+         * avec le mot de passe vide ; sinon [PdfEncryptedException], ou
+         * [PdfWrongPasswordException] si le mot de passe donné est faux.
+         */
+        fun parse(bytes: ByteArray, password: String? = null): PdfFile {
             if (lastIndexOf(bytes, "%PDF-".toByteArray(), minOf(bytes.size, 1024)) < 0) {
                 throw PdfFormatException("Ce fichier n'est pas un PDF")
             }
-            return PdfFile(bytes).apply { open() }
+            return PdfFile(bytes, password).apply { open() }
         }
     }
 }

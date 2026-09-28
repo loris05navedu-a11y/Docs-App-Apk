@@ -32,6 +32,10 @@ android {
         unitTests {
             includeAndroidResources = true
             all {
+                // PDF produits par les tests, à relire avec un autre lecteur : -Ppdfout=dossier
+                if (project.hasProperty('pdfout')) {
+                    systemProperty 'pdfout', project.property('pdfout')
+                }
                 // Captures d'écran à la demande : ./gradlew … -Pscreenshots=dossier
                 if (project.hasProperty('screenshots')) {
                     systemProperty 'screenshots', project.property('screenshots')

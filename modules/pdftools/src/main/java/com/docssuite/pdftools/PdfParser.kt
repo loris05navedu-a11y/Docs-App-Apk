@@ -165,19 +165,21 @@ internal class PdfParser(
         return String(bytes, start, pos - start, Charsets.ISO_8859_1)
     }
 
-    /** `n g obj … endobj` à la position courante ; renvoie le numéro et l'objet. */
-    fun readIndirectObject(): Pair<Int, PdfObject> {
+    /** `n g obj … endobj` à la position courante. */
+    fun readIndirectObject(): Indirect {
         val num = readInt()
-        readInt()
+        val gen = readInt()
         expectKeyword("obj")
         val obj = readObject()
         skipWhitespace()
         if (obj is PdfDict && startsWithKeyword("stream")) {
             pos += "stream".length
-            return num to PdfStream(obj, readStreamData(obj))
+            return Indirect(num, gen, PdfStream(obj, readStreamData(obj)))
         }
-        return num to obj
+        return Indirect(num, gen, obj)
     }
+
+    data class Indirect(val num: Int, val gen: Int, val obj: PdfObject)
 
     /**
      * Les octets d'un flux. La longueur annoncée est vérifiée ; si elle ne
