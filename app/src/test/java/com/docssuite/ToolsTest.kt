@@ -20,7 +20,7 @@ class ToolsTest {
     fun `chaque outil est unique et range dans une famille`() {
         assertEquals(Tools.all.size, Tools.all.map { it.id }.toSet().size)
         ToolCategory.values().forEach { family ->
-            assertTrue(family.label, Tools.of(family).size in 3..6)
+            assertTrue(family.label, Tools.of(family).size in 3..7)
         }
         assertEquals(Tools.all.size, ToolCategory.values().sumOf { Tools.of(it).size })
     }
@@ -54,6 +54,14 @@ class ToolsTest {
         assertEquals("tasks", first("rappel"))
         assertEquals("templates", first("facture"))
         assertEquals("mailmerge", first("publipostage"))
+        assertEquals("pdfprotect", first("mot de passe"))
+        assertEquals("pdfprotect", first("déverrouiller"))
+        assertEquals("pdfstamp", first("filigrane"))
+        assertEquals("pdfstamp", first("numéroter"))
+        assertEquals("pdfcompress", first("compresser"))
+        assertEquals("pdfcompress", first("trop lourd"))
+        assertEquals("flashcards", first("réviser"))
+        assertEquals("flashcards", first("vocabulaire"))
     }
 
     @Test

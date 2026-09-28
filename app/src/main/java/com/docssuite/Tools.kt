@@ -2,9 +2,11 @@ package com.docssuite
 
 import android.content.Context
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Approval
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Difference
 import androidx.compose.material.icons.filled.DocumentScanner
@@ -12,6 +14,7 @@ import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.FileCopy
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.automirrored.filled.ManageSearch
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PictureAsPdf
@@ -19,6 +22,7 @@ import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.automirrored.filled.SendToMobile
 import androidx.compose.material.icons.filled.Slideshow
+import androidx.compose.material.icons.filled.Style
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material.icons.automirrored.filled.TextSnippet
@@ -119,6 +123,21 @@ object Tools {
             Icons.Filled.DocumentScanner, ToolCategory.PDF, route = "scanner",
             keywords = listOf("numériser", "photo", "appareil photo", "caméra", "redresser", "camscanner")
         ),
+        Tool(
+            "pdfprotect", "Protéger un PDF", "Mettre ou retirer un mot de passe",
+            Icons.Filled.Lock, ToolCategory.PDF, route = "pdfprotect",
+            keywords = listOf("mot de passe", "chiffrer", "sécuriser", "verrouiller", "déverrouiller", "déprotéger", "confidentiel", "restriction")
+        ),
+        Tool(
+            "pdfstamp", "Filigrane et numéros", "« CONFIDENTIEL », pages numérotées",
+            Icons.Filled.Approval, ToolCategory.PDF, route = "pdfstamp",
+            keywords = listOf("filigrane", "tampon", "numéroter", "numéro de page", "pagination", "copie", "brouillon", "watermark")
+        ),
+        Tool(
+            "pdfcompress", "Compresser un PDF", "Alléger un PDF trop lourd pour l'e-mail",
+            Icons.Filled.Compress, ToolCategory.PDF, route = "pdfcompress",
+            keywords = listOf("compresser", "réduire", "alléger", "taille", "poids", "lourd", "mail", "optimiser")
+        ),
 
         // ---------------------------------------------------------------- voix et médias
         Tool(
@@ -164,6 +183,11 @@ object Tools {
             "library", "Mes documents", "Chercher partout, dossiers, favoris",
             Icons.AutoMirrored.Filled.ManageSearch, ToolCategory.ORGANIZE, route = "library",
             keywords = listOf("rechercher", "trouver", "dossier", "favori", "ranger", "classer")
+        ),
+        Tool(
+            "flashcards", "Fiches de révision", "Apprendre par cœur, révisions espacées",
+            Icons.Filled.Style, ToolCategory.ORGANIZE, route = "flashcards",
+            keywords = listOf("réviser", "révision", "apprendre", "mémoriser", "flashcards", "vocabulaire", "contrôle", "examen", "bac", "quiz")
         ),
         Tool(
             "tasks", "Tâches et rappels", "Listes, échéances, rappels notifiés",

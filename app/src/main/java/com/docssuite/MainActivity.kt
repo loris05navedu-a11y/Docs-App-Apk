@@ -25,6 +25,9 @@ import com.docssuite.ocr.OcrScreen
 import com.docssuite.recorder.RecorderScreen
 import com.docssuite.tasks.TasksScreen
 import com.docssuite.compare.CompareScreen
+import com.docssuite.flashcards.FlashcardsScreen
+import com.docssuite.pdftools.ui.PdfAction
+import com.docssuite.pdftools.ui.PdfActionScreen
 import com.docssuite.mailmerge.MailMergeScreen
 import com.docssuite.reader.ReaderScreen
 import com.docssuite.templates.Built
@@ -196,6 +199,18 @@ fun DocsSuiteApp(
                     navController.navigate(target) { popUpTo("mailmerge") { inclusive = true } }
                 }
             )
+        }
+        composable("pdfprotect") {
+            PdfActionScreen(PdfAction.PROTECT, onBack = { navController.popBackStack() }, onOpenPdf = { name, bytes -> openPdf(PdfPayload(name, bytes)) })
+        }
+        composable("pdfstamp") {
+            PdfActionScreen(PdfAction.STAMP, onBack = { navController.popBackStack() }, onOpenPdf = { name, bytes -> openPdf(PdfPayload(name, bytes)) })
+        }
+        composable("pdfcompress") {
+            PdfActionScreen(PdfAction.COMPRESS, onBack = { navController.popBackStack() }, onOpenPdf = { name, bytes -> openPdf(PdfPayload(name, bytes)) })
+        }
+        composable("flashcards") {
+            FlashcardsScreen(onBack = { navController.popBackStack() })
         }
         composable("compare") {
             CompareScreen(
