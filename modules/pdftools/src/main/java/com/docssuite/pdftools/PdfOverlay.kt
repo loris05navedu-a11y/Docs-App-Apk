@@ -177,7 +177,7 @@ internal object OverlayWriter {
         return ByteArray(buffer.remaining()).also { buffer.get(it) }
     }
 
-    private fun escape(bytes: ByteArray): ByteArray {
+    fun escape(bytes: ByteArray): ByteArray {
         val out = ByteArrayOutputStream(bytes.size + 8)
         bytes.forEach { b ->
             if (b == '('.code.toByte() || b == ')'.code.toByte() || b == '\\'.code.toByte()) out.write('\\'.code)
