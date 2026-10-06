@@ -74,6 +74,13 @@ class DocSession internal constructor(
     private val presencePath = "docs/$docId/presence/$clientId"
     private var presenceScheduled = false
     private var published: Pair<Int, Int>? = null
+
+    /**
+     * Le dernier curseur annoncé par chaque appareil, tel qu'appliqué. Entre
+     * deux annonces, son curseur suit le texte chez nous : une annonce
+     * identique (le battement de présence) ne doit pas le ramener en arrière.
+     */
+    private val announced = HashMap<String, Pair<Int, Int>>()
     private var activityAt = 0L
     private var disposed = false
 
@@ -151,11 +158,18 @@ class DocSession internal constructor(
         registrations += store.watchChildren(
             "docs/$docId/history",
             Slots.key(start),
-            onChild = { key, value -> Slots.index(key)?.let { live.receive(it, parseRevision(value)) } },
+            onChild = { key, value ->
+                Slots.index(key)?.let { live.receive(it, parseRevision(value)) }
+                // Le texte des autres a pu déplacer notre curseur : on le redit.
+                announce()
+            },
             onError = { close("Vous n'avez plus accès à ce document.") },
         )
         state = State.Open
-        others.forEach { live.setCursor(it.clientId, it.anchor, it.caret) }
+        others.forEach {
+            announced[it.clientId] = it.anchor to it.caret
+            live.setCursor(it.clientId, it.anchor, it.caret)
+        }
         announce(force = true)
         if (heartbeatMillis > 0) jobs += scope.launch {
             while (true) {
@@ -236,7 +250,13 @@ class DocSession internal constructor(
         val live = text ?: return
         val ids = visible.map { it.clientId }.toSet()
         live.cursors.keys.filter { it !in ids }.forEach(live::removeCursor)
-        visible.forEach { live.setCursor(it.clientId, it.anchor, it.caret) }
+        announced.keys.retainAll(ids)
+        for (other in visible) {
+            val position = other.anchor to other.caret
+            if (announced[other.clientId] == position && live.cursors.containsKey(other.clientId)) continue
+            announced[other.clientId] = position
+            live.setCursor(other.clientId, other.anchor, other.caret)
+        }
     }
 
     /** On ne peut plus écrire : on revient au texte enregistré, en le disant. */
