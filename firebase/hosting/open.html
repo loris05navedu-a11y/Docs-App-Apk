@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="light dark">
+<title>Document partagé · DocsApp Suite</title>
+<style>
+  :root {
+    --bg: #F1F5F9; --card: #FFFFFF; --line: #E2E8F0; --text: #0F172A; --muted: #64748B;
+    --blue: #2563EB; --on-blue: #FFFFFF; --soft: #F8FAFC; --warn-bg: #FEF3C7; --warn: #92400E;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0B1220; --card: #111A2E; --line: #24324D; --text: #E2E8F0; --muted: #94A3B8;
+      --blue: #3B82F6; --soft: #0F1729; --warn-bg: #3A2A0B; --warn: #FCD34D;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.5 Roboto, "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif;
+  }
+  main {
+    max-width: 560px; margin: 24px auto; padding: 28px 24px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+  }
+  @media (max-width: 600px) { main { margin: 16px; } }
+  .brand { margin: 0 0 8px; font-size: 13px; letter-spacing: .3px; color: var(--muted); }
+  h1 { margin: 0 0 8px; font-size: 24px; line-height: 1.25; }
+  h2 { margin: 28px 0 8px; font-size: 16px; }
+  p { margin: 8px 0; }
+  .button {
+    display: inline-block; margin: 16px 0 4px; padding: 13px 24px; border-radius: 10px;
+    background: var(--blue); color: var(--on-blue); font-weight: bold; text-decoration: none;
+  }
+  .button:focus-visible { outline: 3px solid var(--text); outline-offset: 2px; }
+  ol { margin: 0; padding-left: 22px; }
+  li { margin: 0 0 6px; }
+  a { color: var(--blue); }
+  .note { padding: 12px 14px; border-radius: 10px; background: var(--soft); border: 1px solid var(--line); font-size: 15px; }
+  .warn { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
+  .small { font-size: 13px; color: var(--muted); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <p class="brand">DocsApp Suite</p>
+  <h1>Un document a été partagé avec vous</h1>
+  <p>Il s’ouvre dans l’application <strong>DocsApp Suite</strong>, sur Android, où vous pourrez le lire ou le modifier en direct avec les autres personnes, selon votre rôle.</p>
+
+  <p id="missing" class="note warn" hidden>L’application n’est pas encore installée sur ce téléphone. Installez-la d’abord (étape 1 ci-dessous), puis revenez sur cette page.</p>
+  <p id="desktop" class="note" hidden>Vous n’êtes pas sur un téléphone Android : ouvrez ce lien depuis votre téléphone, par exemple en vous transférant l’e-mail d’invitation.</p>
+  <p id="broken" class="note warn" hidden>Ce lien est incomplet. Rouvrez-le depuis l’e-mail d’invitation.</p>
+
+  <a id="open" class="button" href="#">Ouvrir dans l’application</a>
+
+  <h2>Première fois&nbsp;?</h2>
+  <ol>
+    <li id="install">Installez DocsApp Suite sur votre téléphone Android. Pas de lien de téléchargement&nbsp;? Demandez le fichier d’installation à la personne qui vous a invité, en répondant à son e-mail.</li>
+    <li>Ouvrez l’application et connectez-vous avec l’adresse e-mail qui a reçu l’invitation (avec un mot de passe, ou avec «&nbsp;Continuer avec Google&nbsp;»).</li>
+    <li>Revenez ici et touchez «&nbsp;Ouvrir dans l’application&nbsp;», ou allez dans «&nbsp;Édition partagée&nbsp;» puis «&nbsp;Partagés avec moi&nbsp;», et touchez «&nbsp;Accepter&nbsp;».</li>
+  </ol>
+
+  <p class="small" style="margin-top:24px">Vous ne vous attendiez pas à cette invitation&nbsp;? Vous pouvez l’ignorer&nbsp;: sans action de votre part, rien ne se passe.</p>
+</main>
+<script>
+  (function () {
+    var match = location.pathname.match(/^\/d\/([^\/?#]+)/);
+    var id = match ? decodeURIComponent(match[1]) : '';
+    var valid = /^[A-Za-z0-9_-]{1,64}$/.test(id);
+    var android = /Android/i.test(navigator.userAgent);
+    var open = document.getElementById('open');
+
+    if (!valid) {
+      document.getElementById('broken').hidden = false;
+      open.hidden = true;
+    } else if (android) {
+      // Sans l'application, Chrome revient ici avec « ?absente ».
+      var back = location.origin + '/d/' + id + '?absente';
+      open.href = 'intent://shared/' + id + '#Intent;scheme=docssuite;package=com.docssuite;S.browser_fallback_url=' + encodeURIComponent(back) + ';end';
+    } else {
+      open.href = 'docssuite://shared/' + id;
+      document.getElementById('desktop').hidden = false;
+    }
+    if (/[?&]absente\b/.test(location.search)) document.getElementById('missing').hidden = false;
+
+    // Lien de téléchargement, s'il a été donné à la mise en ligne.
+    fetch('/app.json', { cache: 'no-store' })
+      .then(function (response) { return response.ok ? response.json() : null; })
+      .then(function (config) {
+        if (!config || typeof config.download !== 'string' || !/^https:\/\//.test(config.download)) return;
+        var item = document.getElementById('install');
+        item.textContent = 'Installez DocsApp Suite sur votre téléphone Android : ';
+        var link = document.createElement('a');
+        link.href = config.download;
+        link.textContent = 'télécharger l’application';
+        item.appendChild(link);
+        item.appendChild(document.createTextNode('. Android vous demandera peut-être d’autoriser l’installation depuis votre navigateur.'));
+      })
+      .catch(function () {});
+  })();
+</script>
+</body>
+</html>

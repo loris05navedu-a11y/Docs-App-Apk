@@ -31,3 +31,14 @@ out/
 .vscode/
 .idea/
 *.code-workspace
+
+# Firebase
+firebase/**/node_modules/
+firebase/.firebase/
+firebase/**/*-debug.log
+firebase/functions/.secret.local
+firebase/functions/.env.*
+!firebase/functions/.env.demo-docsapp
+firebase/hosting/app.json
+# La configuration Firebase de l'app reste hors du dépôt public.
+app/google-services.json

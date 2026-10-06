@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.docssuite",
+      "sha256_cert_fingerprints": [
+        "A7:5C:58:AD:69:FD:ED:8A:65:C2:78:79:0A:10:19:7F:06:61:A2:68:63:FD:57:CC:79:C0:DC:C4:FB:79:49:FD"
+      ]
+    }
+  }
+]

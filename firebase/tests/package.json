@@ -1,0 +1,19 @@
+{
+  "name": "docsapp-suite-server-tests",
+  "private": true,
+  "type": "module",
+  "description": "Tests du serveur : règles de la base, e-mail d'invitation et site des liens, dans les émulateurs Firebase.",
+  "scripts": {
+    "test": "npm run test:rules && npm run test:server",
+    "test:rules": "cd .. && firebase emulators:exec --only database --project demo-docsapp \"node --test tests/rules.test.js\"",
+    "test:server": "node prepare.js && cd .. && firebase emulators:exec --only auth,database,functions,hosting --project demo-docsapp \"node --test --test-concurrency=1 tests/invitation.test.js\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "5.0.2",
+    "firebase": "12.19.0",
+    "firebase-admin": "14.5.0",
+    "firebase-tools": "15.32.1",
+    "mailparser": "3.9.36",
+    "smtp-server": "3.19.17"
+  }
+}

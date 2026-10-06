@@ -1,0 +1,155 @@
+{
+  // Règles de la base temps réel de DocsApp Suite.
+  //
+  // Tout est fermé par défaut : seules les règles ci-dessous ouvrent un accès.
+  // Ce sont elles qui garantissent les rôles, pas l'application : une app
+  // modifiée ne pourrait pas faire plus que ce qui est écrit ici.
+  //
+  //   propriétaire  : tout, et lui seul ajoute, change ou retire des personnes
+  //   éditeur       : modifie le texte, commente, règle les commentaires
+  //   commentateur  : lit et commente
+  //   lecteur       : lit
+  //
+  // Une adresse e-mail sert de clé avec ses points remplacés par des virgules
+  // (un point est interdit dans une clé) : « lea.martin@gmail.com » devient
+  // « lea,martin@gmail,com ». Seule une adresse vérifiée peut accepter une
+  // invitation.
+  "rules": {
+    "docs": {
+      "$docId": {
+        ".read": "auth != null && data.child('members').child(auth.uid).exists()",
+        // Supprimer tout le document : le propriétaire seulement.
+        ".write": "auth != null && !newData.exists() && data.child('meta').child('ownerUid').val() === auth.uid",
+
+        "meta": {
+          ".write": "auth != null && auth.token.email_verified === true && (data.exists() ? data.child('ownerUid').val() === auth.uid : newData.child('ownerUid').val() === auth.uid)",
+          ".validate": "newData.hasChildren(['title', 'ownerUid', 'createdAt']) && (!data.exists() || newData.child('ownerUid').val() === data.child('ownerUid').val())",
+          "title": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 120" },
+          "ownerUid": { ".validate": "newData.isString()" },
+          "ownerName": { ".validate": "newData.isString() && newData.val().length <= 100" },
+          "ownerEmail": { ".validate": "newData.isString() && newData.val().length <= 254" },
+          "createdAt": { ".validate": "newData.isNumber()" },
+          "$other": { ".validate": false }
+        },
+
+        "members": {
+          "$uid": {
+            // Le propriétaire gère les autres (sans pouvoir se retirer lui-même) ;
+            // chacun peut partir ; une personne invitée entre avec le rôle de son
+            // invitation, et l'invitation disparaît dans la même écriture : elle
+            // ne sert qu'une fois.
+            ".write": "auth != null && ((newData.parent().parent().child('meta').child('ownerUid').val() === auth.uid && ($uid !== auth.uid || newData.exists())) || ($uid === auth.uid && !newData.exists() && data.parent().parent().child('meta').child('ownerUid').val() !== auth.uid) || ($uid === auth.uid && !data.exists() && newData.exists() && auth.token.email_verified === true && auth.token.email != null && newData.child('role').val() === data.parent().parent().child('invites').child(auth.token.email.toLowerCase().replace('.', ',')).child('role').val() && !newData.parent().parent().child('invites').child(auth.token.email.toLowerCase().replace('.', ',')).exists()))",
+            // Un seul propriétaire, celui du document ; les autres sont éditeur, commentateur ou lecteur.
+            ".validate": "newData.hasChildren(['role', 'name', 'email']) && (newData.parent().parent().child('meta').child('ownerUid').val() === $uid ? newData.child('role').val() === 'owner' : (newData.child('role').val() === 'editor' || newData.child('role').val() === 'commenter' || newData.child('role').val() === 'reader'))",
+            "role": { ".validate": "newData.isString()" },
+            "name": { ".validate": "newData.isString() && newData.val().length <= 100" },
+            "email": { ".validate": "newData.isString() && newData.val().length <= 254" },
+            "at": { ".validate": "newData.isNumber()" },
+            "$other": { ".validate": false }
+          }
+        },
+
+        "invites": {
+          "$emailKey": {
+            // Le propriétaire invite ; la personne invitée peut effacer son invitation (accepter ou refuser).
+            ".write": "auth != null && (data.parent().parent().child('meta').child('ownerUid').val() === auth.uid || (!newData.exists() && auth.token.email_verified === true && auth.token.email != null && auth.token.email.toLowerCase().replace('.', ',') === $emailKey))",
+            ".validate": "newData.hasChildren(['email', 'role', 'at', 'by']) && newData.child('email').val().toLowerCase().replace('.', ',') === $emailKey",
+            "email": { ".validate": "newData.isString() && newData.val().length <= 254 && newData.val().contains('@')" },
+            "role": { ".validate": "newData.val() === 'editor' || newData.val() === 'commenter' || newData.val() === 'reader'" },
+            "at": { ".validate": "newData.isNumber()" },
+            "by": { ".validate": "newData.val() === auth.uid" },
+            "byName": { ".validate": "newData.isString() && newData.val().length <= 100" },
+            // L'état de l'e-mail d'invitation n'est écrit que par le serveur.
+            "mail": { ".validate": false },
+            "$other": { ".validate": false }
+          }
+        },
+
+        // Le journal des modifications, lettre par lettre : on n'y ajoute
+        // qu'à une place libre, jamais on ne réécrit le passé.
+        "history": {
+          "$rev": {
+            ".write": "auth != null && !data.exists() && newData.exists() && (root.child('docs').child($docId).child('members').child(auth.uid).child('role').val() === 'owner' || root.child('docs').child($docId).child('members').child(auth.uid).child('role').val() === 'editor')",
+            ".validate": "$rev.matches(/^r[0-9]{9}$/) && newData.hasChildren(['c', 'a', 'o', 't']) && newData.child('a').val() === auth.uid && newData.child('t').val() === now",
+            "c": { ".validate": "newData.isString() && newData.val().length <= 64" },
+            "a": { ".validate": "newData.isString()" },
+            // L'opération, en JSON : [garder, "insérer", -effacer, …].
+            "o": { ".validate": "newData.isString() && newData.val().beginsWith('[') && newData.val().length <= 2000000" },
+            "t": { ".validate": "newData.isNumber()" },
+            "$other": { ".validate": false }
+          }
+        },
+
+        // L'instantané du texte, pour ne pas relire tout le journal ; il ne fait qu'avancer.
+        "checkpoint": {
+          ".write": "auth != null && newData.exists() && (newData.parent().child('members').child(auth.uid).child('role').val() === 'owner' || newData.parent().child('members').child(auth.uid).child('role').val() === 'editor')",
+          ".validate": "newData.hasChildren(['n', 'text']) && newData.child('n').isNumber() && newData.child('text').isString() && (!data.exists() || newData.child('n').val() > data.child('n').val())"
+        },
+
+        "activity": {
+          ".write": "auth != null && newData.exists() && (root.child('docs').child($docId).child('members').child(auth.uid).child('role').val() === 'owner' || root.child('docs').child($docId).child('members').child(auth.uid).child('role').val() === 'editor')",
+          ".validate": "newData.hasChildren(['at', 'by']) && newData.child('at').val() === now && newData.child('by').val() === auth.uid"
+        },
+
+        "comments": {
+          "$cid": {
+            // Écrire : propriétaire, éditeur, commentateur. Marquer réglé : son
+            // auteur, l'éditeur, le propriétaire. Supprimer : son auteur, le propriétaire.
+            ".write": "auth != null && ((!data.exists() && newData.exists() && newData.child('a').val() === auth.uid && (root.child('docs').child($docId).child('members').child(auth.uid).child('role').val() === 'owner' || root.child('docs').child($docId).child('members').child(auth.uid).child('role').val() === 'editor' || root.child('docs').child($docId).child('members').child(auth.uid).child('role').val() === 'commenter')) || (data.exists() && newData.exists() && newData.child('a').val() === data.child('a').val() && newData.child('text').val() === data.child('text').val() && (data.child('a').val() === auth.uid || root.child('docs').child($docId).child('members').child(auth.uid).child('role').val() === 'owner' || root.child('docs').child($docId).child('members').child(auth.uid).child('role').val() === 'editor')) || (data.exists() && !newData.exists() && (data.child('a').val() === auth.uid || root.child('docs').child($docId).child('members').child(auth.uid).child('role').val() === 'owner')))",
+            ".validate": "newData.hasChildren(['a', 'name', 'text', 'at'])",
+            "a": { ".validate": "newData.isString()" },
+            "name": { ".validate": "newData.isString() && newData.val().length <= 100" },
+            "text": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 2000" },
+            "quote": { ".validate": "newData.isString() && newData.val().length <= 300" },
+            "at": { ".validate": "newData.isNumber()" },
+            "resolved": { ".validate": "newData.isBoolean()" },
+            "$other": { ".validate": false }
+          }
+        },
+
+        // Qui a le document ouvert, et où est son curseur.
+        "presence": {
+          "$clientId": {
+            ".write": "auth != null && root.child('docs').child($docId).child('members').child(auth.uid).exists() && (newData.exists() ? newData.child('a').val() === auth.uid && (!data.exists() || data.child('a').val() === auth.uid) : data.child('a').val() === auth.uid)",
+            ".validate": "newData.hasChildren(['a', 'name', 'at'])",
+            "a": { ".validate": "newData.isString()" },
+            "name": { ".validate": "newData.isString() && newData.val().length <= 100" },
+            "color": { ".validate": "newData.isNumber()" },
+            "c": { ".validate": "newData.isNumber()" },
+            "s": { ".validate": "newData.isNumber()" },
+            "at": { ".validate": "newData.isNumber()" },
+            "$other": { ".validate": false }
+          }
+        }
+      }
+    },
+
+    // La liste des documents de chacun.
+    "userDocs": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$docId": {
+          ".write": "auth != null && (auth.uid === $uid || (!newData.exists() && root.child('docs').child($docId).child('meta').child('ownerUid').val() === auth.uid))",
+          ".validate": "newData.isBoolean()"
+        }
+      }
+    },
+
+    // Les invitations en attente, rangées par adresse : c'est là qu'une
+    // personne invitée découvre ce qu'on lui partage.
+    "invitesByEmail": {
+      "$emailKey": {
+        ".read": "auth != null && auth.token.email_verified === true && auth.token.email != null && auth.token.email.toLowerCase().replace('.', ',') === $emailKey",
+        "$docId": {
+          ".write": "auth != null && (root.child('docs').child($docId).child('meta').child('ownerUid').val() === auth.uid || (!newData.exists() && auth.token.email_verified === true && auth.token.email != null && auth.token.email.toLowerCase().replace('.', ',') === $emailKey))",
+          ".validate": "newData.hasChildren(['title', 'role', 'at'])",
+          "title": { ".validate": "newData.isString() && newData.val().length <= 120" },
+          "role": { ".validate": "newData.val() === 'editor' || newData.val() === 'commenter' || newData.val() === 'reader'" },
+          "byName": { ".validate": "newData.isString() && newData.val().length <= 100" },
+          "at": { ".validate": "newData.isNumber()" },
+          "$other": { ".validate": false }
+        }
+      }
+    }
+  }
+}
