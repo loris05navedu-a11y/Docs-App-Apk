@@ -33,7 +33,7 @@ test('le texte dit tout : qui, quoi, le rôle, le lien, comment ouvrir, pourquoi
     'Votre rôle : Éditeur.',
     'https://doc-app-suite.web.app/d/-NxAbC123',
     'Connectez-vous avec cette adresse : jean.dupont@exemple.fr',
-    'Partagés avec moi',
+    'ouvrez « Édition partagée » : l’invitation vous y attend, touchez « Accepter »',
     'répondez simplement à cet e-mail',
     'Vous pouvez ignorer ce message',
   ]) {

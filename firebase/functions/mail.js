@@ -107,7 +107,7 @@ function invitationEmail({ inviterName, inviterEmail, recipient, title, role, li
     'Pour l’ouvrir sur votre téléphone :',
     `1. ${install}`,
     `2. Connectez-vous avec cette adresse : ${to} (avec un mot de passe, ou avec « Continuer avec Google »).`,
-    '3. Le document vous attend dans « Partagés avec moi » : touchez « Accepter ».',
+    '3. Dans l’application, ouvrez « Édition partagée » : l’invitation vous y attend, touchez « Accepter ».',
     '',
     ...(download ? [`Pour écrire à ${who}, répondez simplement à cet e-mail.`, ''] : []),
     'Vous ne vous attendiez pas à cette invitation ? Vous pouvez ignorer ce message : sans action de votre part, rien ne se passe. Ce n’est pas une inscription à une liste de diffusion.',
@@ -165,7 +165,7 @@ Le bouton ne marche pas&nbsp;? Copiez ce lien dans votre navigateur&nbsp;:<br>
 <ol style="margin:0;padding-left:22px;">
 <li style="margin:0 0 6px 0;">${installHtml}</li>
 <li style="margin:0 0 6px 0;">Connectez-vous avec cette adresse&nbsp;: <strong>${h(to)}</strong> (avec un mot de passe, ou avec «&nbsp;Continuer avec Google&nbsp;»).</li>
-<li style="margin:0;">Le document vous attend dans «&nbsp;Partagés avec moi&nbsp;»&nbsp;: touchez «&nbsp;Accepter&nbsp;».</li>
+<li style="margin:0;">Dans l’application, ouvrez «&nbsp;Édition partagée&nbsp;»&nbsp;: l’invitation vous y attend, touchez «&nbsp;Accepter&nbsp;».</li>
 </ol>
 ${download ? `<p style="margin:16px 0 0 0;">Pour écrire à ${h(who)}, répondez simplement à cet e-mail.</p>\n` : ''}</td></tr>
 <tr><td style="padding:20px 28px 28px 28px;font-family:Roboto,'Segoe UI',Helvetica,Arial,sans-serif;font-size:13px;line-height:20px;color:#64748B;">
