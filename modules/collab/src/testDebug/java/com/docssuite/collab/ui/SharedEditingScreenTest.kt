@@ -124,7 +124,8 @@ class SharedEditingScreenTest {
             }
         }
         compose.onNodeWithText("L'édition partagée n'est pas encore activée").assertIsDisplayed()
-        compose.onNode(hasText("le fichier google-services.json", substring = true)).assertExists()
+        compose.onNode(hasText("construite sans la configuration Firebase", substring = true)).assertExists()
+        compose.onNodeWithText("Importer google-services.json").assertExists()
         shoot("partage-0-non-configure")
     }
 
@@ -136,11 +137,11 @@ class SharedEditingScreenTest {
         shoot("partage-1-connexion")
 
         compose.onNodeWithText("Créer un compte").performClick()
-        field("Votre nom").performTextInput("Léa Martin")
+        field("Ton nom").performTextInput("Léa Martin")
         field("Adresse e-mail").performTextInput("lea.martin@gmail.com")
         field("Mot de passe").performTextInput("court")
         compose.onNodeWithText("Créer mon compte").performClick()
-        compose.onNodeWithText("Choisissez un mot de passe d'au moins 8 caractères.").assertIsDisplayed()
+        compose.onNodeWithText("Choisis un mot de passe d'au moins 8 caractères.").assertIsDisplayed()
         field("Mot de passe").performTextInput("-et-long")
         compose.onNodeWithText("Créer mon compte").performClick()
 
@@ -175,7 +176,7 @@ class SharedEditingScreenTest {
 
         show(guest)
         pass()
-        compose.onNodeWithText("Léa Martin vous invite à modifier").assertIsDisplayed()
+        compose.onNodeWithText("Léa Martin t'invite à modifier").assertIsDisplayed()
         compose.onNodeWithText("Plan de la semaine").assertIsDisplayed()
         shoot("partage-3-invitation")
         compose.onNodeWithText("Accepter").performClick()
@@ -238,10 +239,10 @@ class SharedEditingScreenTest {
         pass()
         compose.onNodeWithText("Accepter").performClick()
         pass()
-        compose.onNodeWithText("Vous pouvez commenter (sélectionnez du texte), pas modifier.").assertIsDisplayed()
+        compose.onNodeWithText("Tu peux commenter (sélectionne du texte), pas modifier.").assertIsDisplayed()
 
         compose.onNodeWithContentDescription("Commenter").performClick()
-        field("Votre commentaire").performTextInput("On peut avancer à 9 h 30 ?")
+        field("Ton commentaire").performTextInput("On peut avancer à 9 h 30 ?")
         compose.onNodeWithContentDescription("Publier le commentaire").performClick()
         pass()
         compose.onNodeWithText("On peut avancer à 9 h 30 ?").assertIsDisplayed()
@@ -260,7 +261,7 @@ class SharedEditingScreenTest {
         pass()
         compose.onNodeWithText("Accepter").performClick()
         pass()
-        compose.onNodeWithText("Lecture seule : vous voyez les modifications en direct.").assertIsDisplayed()
+        compose.onNodeWithText("Lecture seule : tu vois les modifications en direct.").assertIsDisplayed()
         leaSide.typeAtEnd(" — en vigueur")
         documentText().assert(hasText("Article 1 — en vigueur"))
         assertEquals(null, (server.value("docs/$id/history") as? Map<*, *>)?.values?.firstOrNull { (it as Map<*, *>)["a"] == "paul" })
@@ -295,7 +296,7 @@ class SharedEditingScreenTest {
         pass()
         await { leaSide.remove(leaSide.members.single { it.uid == "paul" }) }
         pass()
-        compose.onNodeWithText("Vous n'avez plus accès à ce document.").assertIsDisplayed()
+        compose.onNodeWithText("Tu n'as plus accès à ce document.").assertIsDisplayed()
         compose.onNode(hasText("paul@exemple.fr", substring = true)).assertIsDisplayed()
         compose.onNodeWithText("Retour à mes documents").performClick()
         pass()

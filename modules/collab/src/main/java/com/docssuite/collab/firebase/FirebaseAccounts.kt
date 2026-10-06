@@ -65,7 +65,7 @@ class FirebaseAccounts(private val auth: FirebaseAuth, private val webClientId: 
 
     override suspend fun signIn(email: String, password: String) {
         AccountRules.checkEmail(email)
-        if (password.isEmpty()) throw CollabException("Entrez votre mot de passe.")
+        if (password.isEmpty()) throw CollabException("Entre ton mot de passe.")
         guard {
             auth.signInWithEmailAndPassword(email.trim(), password).await()
             state.value = auth.currentUser?.toAccount()
@@ -85,12 +85,12 @@ class FirebaseAccounts(private val auth: FirebaseAuth, private val webClientId: 
         } catch (e: GetCredentialCancellationException) {
             return false
         } catch (e: NoCredentialException) {
-            throw CollabException("Aucun compte Google n'est disponible sur ce téléphone. Ajoutez-en un dans les réglages, ou utilisez votre e-mail.", e)
+            throw CollabException("Aucun compte Google n'est disponible sur ce téléphone. Ajoutes-en un dans les réglages, ou utilise ton e-mail.", e)
         } catch (e: GetCredentialException) {
             throw CollabException(googleFailure(e), e)
         }
         if (credential !is CustomCredential || credential.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-            throw CollabException("Google n'a pas renvoyé d'identité utilisable. Réessayez.")
+            throw CollabException("Google n'a pas renvoyé d'identité utilisable. Réessaie.")
         }
         val token = GoogleIdTokenCredential.createFrom(credential.data).idToken
         guard {
@@ -101,7 +101,7 @@ class FirebaseAccounts(private val auth: FirebaseAuth, private val webClientId: 
     }
 
     override suspend fun sendVerification() {
-        val user = auth.currentUser ?: throw CollabException("Connectez-vous d'abord.")
+        val user = auth.currentUser ?: throw CollabException("Connecte-toi d'abord.")
         guard { user.sendEmailVerification().await() }
     }
 
@@ -152,12 +152,12 @@ class FirebaseAccounts(private val auth: FirebaseAuth, private val webClientId: 
     internal companion object {
         /** Ce que l'erreur veut dire, en clair. */
         fun describe(e: Exception): String = when (e) {
-            is FirebaseNetworkException -> "Pas de connexion à Internet. Réessayez dans un instant."
-            is FirebaseTooManyRequestsException -> "Trop d'essais d'affilée. Patientez quelques minutes avant de réessayer."
-            is FirebaseAuthWeakPasswordException -> "Ce mot de passe est trop faible. Choisissez-en un plus long."
+            is FirebaseNetworkException -> "Pas de connexion à Internet. Réessaie dans un instant."
+            is FirebaseTooManyRequestsException -> "Trop d'essais d'affilée. Patiente quelques minutes avant de réessayer."
+            is FirebaseAuthWeakPasswordException -> "Ce mot de passe est trop faible. Choisis-en un plus long."
             is FirebaseAuthUserCollisionException -> when (e.errorCode) {
-                "ERROR_EMAIL_ALREADY_IN_USE" -> "Un compte existe déjà avec cette adresse : connectez-vous (ou utilisez « Mot de passe oublié »)."
-                else -> "Cette adresse est déjà liée à un autre mode de connexion. Connectez-vous avec votre mot de passe."
+                "ERROR_EMAIL_ALREADY_IN_USE" -> "Un compte existe déjà avec cette adresse : connecte-toi (ou utilise « Mot de passe oublié »)."
+                else -> "Cette adresse est déjà liée à un autre mode de connexion. Connecte-toi avec ton mot de passe."
             }
             is FirebaseAuthInvalidUserException -> when (e.errorCode) {
                 "ERROR_USER_DISABLED" -> "Ce compte a été désactivé."
@@ -179,7 +179,7 @@ class FirebaseAccounts(private val auth: FirebaseAuth, private val webClientId: 
             return if (detail.contains("28444") || detail.contains("10:") || detail.contains("Developer console", ignoreCase = true)) {
                 "Google refuse la connexion : l'empreinte SHA-1 de l'application n'est pas enregistrée dans Firebase."
             } else {
-                "La connexion avec Google n'a pas abouti. Réessayez, ou utilisez votre e-mail."
+                "La connexion avec Google n'a pas abouti. Réessaie, ou utilise ton e-mail."
             }
         }
     }

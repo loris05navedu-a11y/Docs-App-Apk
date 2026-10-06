@@ -3,6 +3,36 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+// La configuration Firebase de l'édition partagée, lue dans google-services.json
+// (téléchargé depuis la console Firebase et gardé hors du dépôt). Sans lui,
+// l'application se construit quand même : l'édition partagée dit ce qui manque.
+def firebaseConfig = {
+    def config = file('google-services.json')
+    if (!config.exists()) return null
+    def json = new groovy.json.JsonSlurper().parse(config)
+    def client = json.client?.find { it.client_info?.android_client_info?.package_name == 'com.docssuite' }
+    if (client == null) {
+        logger.warn("google-services.json : aucune application Android « com.docssuite » dedans.")
+        return null
+    }
+    def oauth = (client.oauth_client ?: []) + (client.services?.appinvite_service?.other_platform_oauth_client ?: [])
+    def result = [
+        appId      : client.client_info?.mobilesdk_app_id,
+        apiKey     : client.api_key?.find()?.current_key,
+        projectId  : json.project_info?.project_id,
+        senderId   : json.project_info?.project_number,
+        databaseUrl: json.project_info?.firebase_url,
+        webClientId: oauth.find { it.client_type == 3 }?.client_id,
+    ]
+    if (!result.appId || !result.apiKey || !result.projectId) {
+        logger.warn("google-services.json incomplet : identifiant d'application, clé ou projet manquant.")
+        return null
+    }
+    if (!result.databaseUrl) logger.warn("google-services.json sans base temps réel : créez-la, puis retéléchargez le fichier.")
+    if (!result.webClientId) logger.warn("google-services.json sans client Web : activez la connexion Google, puis retéléchargez le fichier.")
+    return result
+}()
+
 android {
     namespace "com.docssuite"
     compileSdk 35
@@ -19,6 +49,18 @@ android {
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a'
         }
+
+        // Les noms que lit Firebase au démarrage, comme avec le plugin google-services.
+        if (firebaseConfig != null) {
+            resValue 'string', 'google_app_id', firebaseConfig.appId
+            resValue 'string', 'google_api_key', firebaseConfig.apiKey
+            resValue 'string', 'project_id', firebaseConfig.projectId
+            if (firebaseConfig.senderId) resValue 'string', 'gcm_defaultSenderId', firebaseConfig.senderId
+            if (firebaseConfig.databaseUrl) resValue 'string', 'firebase_database_url', firebaseConfig.databaseUrl
+            if (firebaseConfig.webClientId) resValue 'string', 'default_web_client_id', firebaseConfig.webClientId
+        }
+        // Le site des liens d'invitation, que l'application ouvre elle-même.
+        manifestPlaceholders.docsappLinkHost = firebaseConfig != null ? "${firebaseConfig.projectId}.web.app" : 'docssuite.invalid'
     }
 
     buildTypes {
@@ -92,6 +134,7 @@ dependencies {
     implementation project(':modules:mailmerge')
     implementation project(':modules:compare')
     implementation project(':modules:flashcards')
+    implementation project(':modules:collab')
 
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.robolectric:robolectric:4.11.1'

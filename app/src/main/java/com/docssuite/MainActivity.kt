@@ -6,6 +6,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -25,6 +26,7 @@ import com.docssuite.ocr.OcrScreen
 import com.docssuite.recorder.RecorderScreen
 import com.docssuite.tasks.TasksScreen
 import com.docssuite.compare.CompareScreen
+import com.docssuite.collab.ui.SharedEditingScreen
 import com.docssuite.flashcards.FlashcardsScreen
 import com.docssuite.pdftools.ui.PdfAction
 import com.docssuite.pdftools.ui.PdfActionScreen
@@ -58,14 +60,20 @@ class MainActivity : ComponentActivity() {
      */
     private var incoming by mutableStateOf<Uri?>(null)
 
+    /** Un lien d'invitation à un document partagé, reçu par e-mail. */
+    private var sharedLink by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        incoming = uriFrom(intent)
+        // Une seule fois : pas de nouveau saut au document quand l'écran tourne.
+        if (savedInstanceState == null) receive(intent)
         setContent {
             DocsSuiteTheme {
                 DocsSuiteApp(
                     incomingFile = incoming,
-                    onIncomingHandled = { incoming = null }
+                    onIncomingHandled = { incoming = null },
+                    sharedLink = sharedLink,
+                    onSharedLinkHandled = { sharedLink = null }
                 )
             }
         }
@@ -74,7 +82,12 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        uriFrom(intent)?.let { incoming = it }
+        receive(intent)
+    }
+
+    private fun receive(intent: Intent?) {
+        val shared = sharedDocFrom(intent)
+        if (shared != null) sharedLink = shared else uriFrom(intent)?.let { incoming = it }
     }
 
     @Suppress("DEPRECATION")
@@ -83,6 +96,20 @@ class MainActivity : ComponentActivity() {
         Intent.ACTION_SEND -> intent.getParcelableExtra(Intent.EXTRA_STREAM)
         else -> null
     }
+}
+
+/**
+ * L'identifiant du document, si l'intent est un lien d'invitation :
+ * https://<projet>.web.app/d/<id>, ou docssuite://shared/<id> depuis la page web.
+ */
+internal fun sharedDocFrom(intent: Intent?): String? {
+    val data = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data ?: return null
+    val id = when (data.scheme) {
+        "docssuite" -> data.takeIf { it.host == "shared" }?.pathSegments?.firstOrNull()
+        "https", "http" -> data.pathSegments.takeIf { it.size >= 2 && it[0] == "d" }?.get(1)
+        else -> null
+    }
+    return id?.takeIf { Regex("[A-Za-z0-9_-]{1,64}").matches(it) }
 }
 
 private fun route(base: String, docId: String?): String =
@@ -99,11 +126,20 @@ private fun docArgument() = listOf(
 @Composable
 fun DocsSuiteApp(
     incomingFile: Uri? = null,
-    onIncomingHandled: () -> Unit = {}
+    onIncomingHandled: () -> Unit = {},
+    sharedLink: String? = null,
+    onSharedLinkHandled: () -> Unit = {}
 ) {
     val navController = rememberNavController()
     val context = LocalContext.current
     val storage = remember { DocumentStorage(context) }
+
+    LaunchedEffect(sharedLink) {
+        if (sharedLink != null) {
+            navController.navigate("shared?doc=$sharedLink")
+            onSharedLinkHandled()
+        }
+    }
 
     // Un PDF se transmet par ses octets, pas par un argument de navigation :
     // une route ne peut pas porter un fichier.
@@ -261,6 +297,13 @@ fun DocsSuiteApp(
             PdfToolsScreen(
                 onBack = { navController.popBackStack() },
                 onOpenPdf = { name, bytes -> openPdf(PdfPayload(name, bytes)) }
+            )
+        }
+        composable("shared?doc={doc}", arguments = docArgument()) { entry ->
+            SharedEditingScreen(
+                onBack = { navController.popBackStack() },
+                openDocId = entry.arguments?.getString("doc"),
+                onOpenLocal = { navController.navigate(route("text_editor", it)) }
             )
         }
         composable("scanner") {

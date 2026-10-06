@@ -206,10 +206,10 @@ internal fun DocPage(
                 is DocSession.State.Closed -> Closed(state.reason, session, onBack)
                 DocSession.State.Open -> {
                     Presence(session)
-                    if (!session.connected) Banner("Hors ligne : vos frappes partiront dès le retour du réseau.", Color(0xFFD97706))
+                    if (!session.connected) Banner("Hors ligne : tes frappes partiront dès le retour du réseau.", Color(0xFFD97706))
                     when (session.role) {
-                        Role.READER -> Banner("Lecture seule : vous voyez les modifications en direct.", MaterialTheme.colorScheme.onSurfaceVariant)
-                        Role.COMMENTER -> Banner("Vous pouvez commenter (sélectionnez du texte), pas modifier.", MaterialTheme.colorScheme.onSurfaceVariant)
+                        Role.READER -> Banner("Lecture seule : tu vois les modifications en direct.", MaterialTheme.colorScheme.onSurfaceVariant)
+                        Role.COMMENTER -> Banner("Tu peux commenter (sélectionne du texte), pas modifier.", MaterialTheme.colorScheme.onSurfaceVariant)
                         else -> {}
                     }
                     if (session.isOwner && session.members.size <= 1 && session.invites.isEmpty()) {
@@ -250,7 +250,7 @@ internal fun DocPage(
     if (confirmLeave) {
         Confirm(
             "Quitter le document ?",
-            "Vous n'y aurez plus accès, sauf si son propriétaire vous invite à nouveau.",
+            "Tu n'y auras plus accès, sauf si son propriétaire t'invite à nouveau.",
             "Quitter",
             onConfirm = { confirmLeave = false; act { session.leave() } },
             onDismiss = { confirmLeave = false },
@@ -259,8 +259,8 @@ internal fun DocPage(
     if (confirmQuit) {
         Confirm(
             "Modifications pas encore enregistrées",
-            if (session.connected) "Vos dernières frappes sont en cours d'envoi. Patientez un instant, ou quittez quand même."
-            else "Vous êtes hors ligne : vos dernières frappes n'ont pas pu partir. Si vous quittez maintenant, elles seront perdues.",
+            if (session.connected) "Tes dernières frappes sont en cours d'envoi. Patiente un instant, ou quitte quand même."
+            else "Tu es hors ligne : tes dernières frappes n'ont pas pu partir. Si tu quittes maintenant, elles seront perdues.",
             "Quitter quand même",
             onConfirm = { confirmQuit = false; onBack() },
             onDismiss = { confirmQuit = false },
@@ -338,9 +338,9 @@ private fun Closed(reason: String, session: DocSession, onBack: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(reason, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        if (reason.startsWith("Vous n'avez pas accès") || reason.startsWith("Vous n'avez plus accès")) {
+        if (reason.startsWith("Tu n'as pas accès") || reason.startsWith("Tu n'as plus accès")) {
             Text(
-                "Pour l'ouvrir, demandez à son propriétaire de vous inviter avec l'adresse ${session.me.email}.",
+                "Pour l'ouvrir, demande à son propriétaire de t'inviter avec l'adresse ${session.me.email}.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

@@ -53,6 +53,25 @@
                 <data android:mimeType="application/octet-stream" />
             </intent-filter>
 
+            <!-- Les liens d'invitation de l'édition partagée : Android les ouvre
+                 directement ici une fois le site vérifié (assetlinks.json). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="${docsappLinkHost}" />
+                <data android:pathPrefix="/d/" />
+            </intent-filter>
+
+            <!-- Le même lien, relayé par la page web quand Android ne l'a pas ouvert. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="docssuite" android:host="shared" />
+            </intent-filter>
+
             <!-- Recevoir un fichier partagé depuis une messagerie. -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />

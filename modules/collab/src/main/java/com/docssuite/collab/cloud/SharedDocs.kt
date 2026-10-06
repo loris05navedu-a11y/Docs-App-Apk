@@ -119,7 +119,7 @@ class SharedDocs(
         val me = verified()
         val clean = title.trim().take(120).ifEmpty { "Document sans titre" }
         val id = store.newKey()
-        attempt("Vérifiez d'abord votre adresse e-mail.") {
+        attempt("Vérifie d'abord ton adresse e-mail.") {
             store.update(
                 mapOf(
                     "docs/$id/meta" to mapOf(
@@ -168,8 +168,8 @@ class SharedDocs(
     }
 
     private fun verified(): Account {
-        val me = accounts.current.value ?: throw CollabException("Connectez-vous d'abord.")
-        if (!me.verified) throw CollabException("Vérifiez d'abord votre adresse e-mail.")
+        val me = accounts.current.value ?: throw CollabException("Connecte-toi d'abord.")
+        if (!me.verified) throw CollabException("Vérifie d'abord ton adresse e-mail.")
         return me
     }
 
@@ -181,7 +181,7 @@ class SharedDocs(
 
     /** Ouvrir (ou reprendre) un document ; à rendre avec [release]. */
     fun acquire(docId: String): DocSession {
-        val me = accounts.current.value ?: throw CollabException("Connectez-vous d'abord.")
+        val me = accounts.current.value ?: throw CollabException("Connecte-toi d'abord.")
         open[docId]?.let { entry ->
             if (entry.session.me.uid == me.uid && entry.session.state !is DocSession.State.Closed) {
                 entry.closing?.cancel()

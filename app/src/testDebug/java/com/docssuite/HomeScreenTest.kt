@@ -117,6 +117,14 @@ class HomeScreenTest {
     }
 
     @Test
+    fun `l'edition partagee s'ouvre depuis l'accueil`() {
+        show()
+        compose.onNodeWithContentDescription("Nouveau : Édition partagée").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Nouveau : Édition partagée").performClick()
+        assertEquals(listOf("shared"), navigated)
+    }
+
+    @Test
     fun `la creation ouvre l'editeur vide`() {
         show()
         compose.onNodeWithContentDescription("Nouveau : Tableur").performClick()

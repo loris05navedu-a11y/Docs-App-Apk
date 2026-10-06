@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.ManageSearch
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Slideshow
@@ -336,6 +337,7 @@ private fun HomeTabContent(
                 }
             }
         }
+        Tools.byId(Tools.SHARED)?.let { tool -> item { WideCreateTile(tool) { onTool(tool) } } }
 
         item {
             SectionTitle(
@@ -512,6 +514,37 @@ private fun CreateTile(tool: Tool, modifier: Modifier, onClick: () -> Unit) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+        }
+    }
+}
+
+/** Une création qui mérite toute la largeur : écrire à plusieurs. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WideCreateTile(tool: Tool, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(18.dp),
+        color = tool.color.copy(alpha = 0.10f),
+        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Nouveau : ${tool.title}" }
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(44.dp).background(tool.color, RoundedCornerShape(14.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(tool.icon, contentDescription = null, tint = Color.White)
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(tool.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Écrire à plusieurs en direct, chacun sur son téléphone",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = tool.color)
         }
     }
 }

@@ -35,10 +35,10 @@ interface Accounts {
 /** Ce qu'on vérifie avant même de demander au serveur. */
 object AccountRules {
     fun checkSignUp(name: String, email: String, password: String) {
-        if (name.isBlank()) throw CollabException("Indiquez votre nom : c'est lui que verront les personnes avec qui vous partagez.")
+        if (name.isBlank()) throw CollabException("Indique ton nom : c'est lui que verront les personnes avec qui tu partages.")
         if (name.trim().length > 60) throw CollabException("Ce nom est trop long (60 caractères au plus).")
         checkEmail(email)
-        if (password.length < 8) throw CollabException("Choisissez un mot de passe d'au moins 8 caractères.")
+        if (password.length < 8) throw CollabException("Choisis un mot de passe d'au moins 8 caractères.")
     }
 
     fun checkEmail(email: String) {

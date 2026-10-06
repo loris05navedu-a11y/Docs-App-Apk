@@ -38,7 +38,7 @@ class FakeAccounts(
     override suspend fun signUp(name: String, email: String, password: String) {
         AccountRules.checkSignUp(name, email, password)
         val address = email.trim().lowercase()
-        if (registered.containsKey(address)) throw CollabException("Un compte existe déjà avec cette adresse : connectez-vous.")
+        if (registered.containsKey(address)) throw CollabException("Un compte existe déjà avec cette adresse : connecte-toi.")
         val account = Account("u-${++next}", name.trim(), address, verified = false)
         register(account, password)
         state.value = account

@@ -55,7 +55,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import com.docssuite.collab.Collab
 import com.docssuite.collab.CollabSetup
+import com.docssuite.core.rememberFileOpener
 import com.docssuite.collab.cloud.Account
 import com.docssuite.collab.cloud.Accounts
 import com.docssuite.collab.cloud.CollabException
@@ -124,8 +126,8 @@ internal fun AuthPage(accounts: Accounts, onBack: () -> Unit) {
             Explanation(
                 "Écrire à plusieurs, en direct",
                 "Chaque lettre tapée apparaît aussitôt chez les autres, où qu'ils soient : il suffit d'une connexion " +
-                    "à Internet. Un compte sert à retrouver vos documents partagés et à recevoir les invitations, " +
-                    "à votre adresse e-mail.",
+                    "à Internet. Un compte sert à retrouver tes documents partagés et à recevoir les invitations, " +
+                    "à ton adresse e-mail.",
             )
             if (accounts.googleAvailable) {
                 OutlinedButton(
@@ -142,7 +144,7 @@ internal fun AuthPage(accounts: Accounts, onBack: () -> Unit) {
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     HorizontalDivider(Modifier.weight(1f))
-                    Text("ou avec votre e-mail", Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("ou avec ton e-mail", Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     HorizontalDivider(Modifier.weight(1f))
                 }
             }
@@ -154,9 +156,9 @@ internal fun AuthPage(accounts: Accounts, onBack: () -> Unit) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Votre nom") },
+                    label = { Text("Ton nom") },
                     placeholder = { Text("Prénom Nom") },
-                    supportingText = { Text("Il s'affiche auprès des personnes avec qui vous partagez.") },
+                    supportingText = { Text("Il s'affiche auprès des personnes avec qui tu partages.") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                     modifier = Modifier.fillMaxWidth(),
@@ -249,7 +251,7 @@ internal fun VerifyPage(accounts: Accounts, account: Account, onBack: () -> Unit
         }
     }
 
-    Scaffold(topBar = { SimpleTopBar("Vérifiez votre adresse", onBack) }) { padding ->
+    Scaffold(topBar = { SimpleTopBar("Vérifie ton adresse", onBack) }) { padding ->
         Column(
             Modifier
                 .fillMaxSize()
@@ -262,12 +264,12 @@ internal fun VerifyPage(accounts: Accounts, account: Account, onBack: () -> Unit
             Icon(Icons.Filled.MarkEmailUnread, contentDescription = null, tint = Accent, modifier = Modifier.size(64.dp))
             Text("Un dernier pas", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Text(
-                "Un e-mail vient d'être envoyé à ${account.email}. Ouvrez-le et touchez le lien de vérification, " +
-                    "puis revenez ici : la suite s'ouvre toute seule.",
+                "Un e-mail vient d'être envoyé à ${account.email}. Ouvre-le et touche le lien de vérification, " +
+                    "puis reviens ici : la suite s'ouvre toute seule.",
                 style = MaterialTheme.typography.bodyLarge,
             )
             Text(
-                "Rien reçu ? Regardez dans les courriers indésirables, ou renvoyez l'e-mail.",
+                "Rien reçu ? Regarde dans les courriers indésirables, ou renvoie l'e-mail.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -276,7 +278,7 @@ internal fun VerifyPage(accounts: Accounts, account: Account, onBack: () -> Unit
                 onClick = {
                     run {
                         val now = accounts.refresh()
-                        if (now?.verified != true) message = "L'adresse n'est pas encore vérifiée : touchez le lien de l'e-mail."
+                        if (now?.verified != true) message = "L'adresse n'est pas encore vérifiée : touche le lien de l'e-mail."
                     }
                 },
                 enabled = !busy,
@@ -299,7 +301,19 @@ internal fun VerifyPage(accounts: Accounts, account: Account, onBack: () -> Unit
 
 /** Cette version de l'application n'a pas la configuration Firebase. */
 @Composable
-internal fun NotConfiguredPage(missing: CollabSetup.Missing.Part, onBack: () -> Unit) {
+internal fun NotConfiguredPage(missing: CollabSetup.Missing.Part, onBack: () -> Unit, onImported: (CollabSetup) -> Unit) {
+    val context = LocalContext.current
+    var error by remember { mutableStateOf<String?>(null) }
+    val opener = rememberFileOpener(onError = { error = it }) { file ->
+        error = null
+        try {
+            onImported(Collab.importConfig(context, String(file.bytes, Charsets.UTF_8)))
+        } catch (e: CollabException) {
+            error = e.message
+        } catch (e: Exception) {
+            error = "La configuration n'a pas pu être chargée : ${e.message}"
+        }
+    }
     Scaffold(topBar = { SimpleTopBar("Édition partagée", onBack) }) { padding ->
         Column(
             Modifier
@@ -324,12 +338,22 @@ internal fun NotConfiguredPage(missing: CollabSetup.Missing.Part, onBack: () -> 
             )
             Explanation(
                 "Pour la personne qui gère l'application",
-                "1. Dans la console Firebase, enregistrez l'application Android « com.docssuite ».\n" +
-                    "2. Authentication : activez « Adresse e-mail/Mot de passe » et « Google ».\n" +
-                    "3. Realtime Database : créez la base (Belgique, europe-west1).\n" +
-                    "4. Téléchargez google-services.json et reconstruisez l'application avec.\n" +
-                    "5. Mettez en ligne les règles, l'e-mail d'invitation et les liens (firebase/deploy.sh).",
+                "1. Dans la console Firebase, enregistre l'application Android « com.docssuite ».\n" +
+                    "2. Authentication : active « Adresse e-mail/Mot de passe » et « Google ».\n" +
+                    "3. Realtime Database : crée la base (Belgique, europe-west1).\n" +
+                    "4. Télécharge google-services.json et reconstruis l'application avec.\n" +
+                    "5. Mets en ligne les règles, l'e-mail d'invitation et les liens (firebase/deploy.sh).",
             )
+            Text(
+                "Déjà le fichier google-services.json sur ce téléphone ? Il peut activer l'édition partagée " +
+                    "sans reconstruire l'application (à faire sur chaque téléphone qui s'en sert).",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(onClick = { opener.open(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth()) {
+                Text("Importer google-services.json")
+            }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
         }
     }
 }

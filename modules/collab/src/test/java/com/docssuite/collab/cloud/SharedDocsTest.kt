@@ -128,7 +128,7 @@ class SharedDocsTest {
             phone.docs.create("Essai", "")
             fail()
         } catch (e: CollabException) {
-            assertEquals("Vérifiez d'abord votre adresse e-mail.", e.message)
+            assertEquals("Vérifie d'abord ton adresse e-mail.", e.message)
         }
     }
 
@@ -170,7 +170,7 @@ class SharedDocsTest {
         advanceUntilIdle()
         for ((address, message) in listOf(
             "pas-une-adresse" to "Cette adresse e-mail n'est pas valide.",
-            "LEA.MARTIN@gmail.com" to "C'est votre propre adresse.",
+            "LEA.MARTIN@gmail.com" to "C'est ta propre adresse.",
         )) {
             try {
                 session.invite(address, Role.EDITOR)
@@ -303,7 +303,7 @@ class SharedDocsTest {
 
         a.remove(a.members.single { it.uid == "paul" })
         advanceUntilIdle()
-        assertEquals(DocSession.State.Closed("Vous n'avez plus accès à ce document."), mine.state)
+        assertEquals(DocSession.State.Closed("Tu n'as plus accès à ce document."), mine.state)
         assertTrue(list()!!.isEmpty())
     }
 

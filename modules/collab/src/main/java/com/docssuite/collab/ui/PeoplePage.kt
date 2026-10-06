@@ -219,7 +219,7 @@ private fun MemberRow(member: Member, isMe: Boolean, canManage: Boolean, onRole:
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                if (isMe) "${member.name} (vous)" else member.name,
+                if (isMe) "${member.name} (toi)" else member.name,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,

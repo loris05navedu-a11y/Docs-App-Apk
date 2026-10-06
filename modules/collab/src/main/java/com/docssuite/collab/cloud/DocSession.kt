@@ -116,7 +116,7 @@ class DocSession internal constructor(
         watch("docs/$docId/members/${me.uid}/role") { value ->
             val now = Role.of(value)
             if (now == null) {
-                close("Vous n'avez plus accès à ce document.")
+                close("Tu n'as plus accès à ce document.")
             } else {
                 val before = role
                 role = now
@@ -145,8 +145,8 @@ class DocSession internal constructor(
             store.read("docs/$docId/checkpoint").asMap()
         } catch (e: StoreException) {
             close(
-                if (e is StoreException.PermissionDenied) "Vous n'avez pas accès à ce document."
-                else "Le document ne s'ouvre pas : vérifiez votre connexion à Internet."
+                if (e is StoreException.PermissionDenied) "Tu n'as pas accès à ce document."
+                else "Le document ne s'ouvre pas : vérifie ta connexion à Internet."
             )
             return
         }
@@ -163,7 +163,7 @@ class DocSession internal constructor(
                 // Le texte des autres a pu déplacer notre curseur : on le redit.
                 announce()
             },
-            onError = { close("Vous n'avez plus accès à ce document.") },
+            onError = { close("Tu n'as plus accès à ce document.") },
         )
         state = State.Open
         others.forEach {
@@ -264,11 +264,11 @@ class DocSession internal constructor(
         val live = text ?: return
         if (live.synced) return
         live.discardLocal()
-        notice = "Vous ne pouvez plus modifier ce document : vos dernières frappes n'ont pas été enregistrées."
+        notice = "Tu ne peux plus modifier ce document : tes dernières frappes n'ont pas été enregistrées."
     }
 
     private fun watch(path: String, onValue: (Any?) -> Unit) {
-        registrations += store.watch(path, onValue) { close("Vous n'avez plus accès à ce document.") }
+        registrations += store.watch(path, onValue) { close("Tu n'as plus accès à ce document.") }
     }
 
     private fun close(reason: String) {
@@ -300,12 +300,12 @@ class DocSession internal constructor(
     suspend fun invite(email: String, role: Role) {
         val address = email.trim()
         if (!isEmail(address)) throw CollabException("Cette adresse e-mail n'est pas valide.")
-        if (address.equals(me.email, ignoreCase = true)) throw CollabException("C'est votre propre adresse.")
+        if (address.equals(me.email, ignoreCase = true)) throw CollabException("C'est ta propre adresse.")
         if (members.any { it.email.equals(address, ignoreCase = true) }) {
             throw CollabException("Cette personne a déjà accès au document.")
         }
         if (invites.any { it.key == emailKey(address) }) {
-            throw CollabException("Une invitation attend déjà cette adresse. Vous pouvez la renvoyer.")
+            throw CollabException("Une invitation attend déjà cette adresse. Tu peux la renvoyer.")
         }
         owner { store.update(invitation(address, role)) }
     }
@@ -356,7 +356,7 @@ class DocSession internal constructor(
 
     suspend fun rename(title: String) {
         val clean = title.trim().take(120)
-        if (clean.isEmpty()) throw CollabException("Donnez un titre au document.")
+        if (clean.isEmpty()) throw CollabException("Donne un titre au document.")
         owner {
             store.update(
                 buildMap {
@@ -395,7 +395,7 @@ class DocSession internal constructor(
                 )
             )
         }
-        close("Vous avez quitté le document.")
+        close("Tu as quitté le document.")
     }
 
     // --- Les commentaires ---
@@ -404,7 +404,7 @@ class DocSession internal constructor(
         val clean = text.trim()
         if (clean.isEmpty()) throw CollabException("Le commentaire est vide.")
         if (clean.length > 2000) throw CollabException("Le commentaire est trop long (2 000 caractères au plus).")
-        attempt("Votre rôle ne permet pas de commenter.") {
+        attempt("Ton rôle ne permet pas de commenter.") {
             store.update(
                 mapOf(
                     "docs/$docId/comments/${store.newKey()}" to mapOf(
@@ -442,5 +442,5 @@ internal suspend fun <T> attempt(denied: String, block: suspend () -> T): T =
     } catch (e: StoreException.PermissionDenied) {
         throw CollabException(denied, e)
     } catch (e: StoreException.Unavailable) {
-        throw CollabException("Pas de connexion à Internet. Réessayez dans un instant.", e)
+        throw CollabException("Pas de connexion à Internet. Réessaie dans un instant.", e)
     }

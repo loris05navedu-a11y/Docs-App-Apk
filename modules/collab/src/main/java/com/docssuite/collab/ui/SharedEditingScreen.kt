@@ -138,9 +138,9 @@ fun SharedEditingScreen(
     setup: CollabSetup? = null,
 ) {
     val context = LocalContext.current
-    val resolved = setup ?: remember { Collab.setup(context) }
-    when (resolved) {
-        is CollabSetup.Missing -> NotConfiguredPage(resolved.what, onBack)
+    var configured by remember { mutableStateOf(setup ?: Collab.setup(context)) }
+    when (val resolved = configured) {
+        is CollabSetup.Missing -> NotConfiguredPage(resolved.what, onBack, onImported = { configured = it })
         is CollabSetup.Ready -> {
             val docs = resolved.docs
             val account by docs.accounts.current.collectAsState()
@@ -296,9 +296,9 @@ private fun HomePage(
                 documents.isEmpty() -> item {
                     Explanation(
                         "Écrire à plusieurs, en direct",
-                        "Créez un document, puis invitez des personnes par leur adresse e-mail : elles reçoivent un " +
+                        "Crée un document, puis invite des personnes par leur adresse e-mail : elles reçoivent un " +
                             "e-mail et le retrouvent ici. Chaque lettre tapée apparaît aussitôt chez tout le monde, " +
-                            "avec le curseur de chacun. Vous choisissez qui peut modifier, commenter ou seulement lire.",
+                            "avec le curseur de chacun. Tu choisis qui peut modifier, commenter ou seulement lire.",
                     )
                 }
                 else -> {
@@ -326,7 +326,7 @@ private fun InvitationCard(invitation: Invitation, busy: Boolean, onAccept: () -
                 Icon(Icons.Filled.MailOutline, contentDescription = null, tint = Accent)
                 Spacer(Modifier.width(10.dp))
                 Text(
-                    "${invitation.byName.ifBlank { "Quelqu'un" }} vous invite à ${verb(invitation.role)}",
+                    "${invitation.byName.ifBlank { "Quelqu'un" }} t'invite à ${verb(invitation.role)}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -419,7 +419,7 @@ private fun NewDocPage(docs: SharedDocs, onBack: () -> Unit, onCreated: (String)
             SourceRow("Un document vide", null, selected = source == null) { source = null }
             if (local.isNotEmpty()) {
                 Text(
-                    "Ou une copie d'un de vos documents (le texte, sans la mise en forme) :",
+                    "Ou une copie d'un de tes documents (le texte, sans la mise en forme) :",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -495,8 +495,8 @@ private fun AccountPage(docs: SharedDocs, me: Account, onBack: () -> Unit) {
                 }
             }
             Explanation(
-                "Vos documents restent en ligne",
-                "En vous déconnectant, vous les retrouverez en vous reconnectant avec ${me.email}, sur ce téléphone ou un autre.",
+                "Tes documents restent en ligne",
+                "Après la déconnexion, tu les retrouves en te reconnectant avec ${me.email}, sur ce téléphone ou un autre.",
             )
             OutlinedButton(
                 onClick = {

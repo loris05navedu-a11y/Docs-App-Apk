@@ -62,6 +62,10 @@ class ToolsTest {
         assertEquals("pdfcompress", first("trop lourd"))
         assertEquals("flashcards", first("réviser"))
         assertEquals("flashcards", first("vocabulaire"))
+        assertEquals(Tools.SHARED, first("collaborer"))
+        assertEquals(Tools.SHARED, first("à plusieurs"))
+        assertEquals(Tools.SHARED, first("google docs"))
+        assertEquals(Tools.SHARED, first("temps réel"))
     }
 
     @Test

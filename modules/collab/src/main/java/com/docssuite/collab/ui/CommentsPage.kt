@@ -95,7 +95,7 @@ internal fun CommentsPage(session: DocSession, initialQuote: String?, onBack: ()
                             OutlinedTextField(
                                 value = draft,
                                 onValueChange = { draft = it.take(2000) },
-                                placeholder = { Text("Votre commentaire") },
+                                placeholder = { Text("Ton commentaire") },
                                 modifier = Modifier.weight(1f),
                                 maxLines = 5,
                             )
@@ -129,12 +129,12 @@ internal fun CommentsPage(session: DocSession, initialQuote: String?, onBack: ()
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             if (!session.canComment && role != null) {
-                item { Explanation("Lecture seule", "Votre rôle (${role.label}) permet de lire les commentaires, pas d'en écrire.") }
+                item { Explanation("Lecture seule", "Ton rôle (${role.label}) permet de lire les commentaires, pas d'en écrire.") }
             }
             if (open.isEmpty()) {
                 item {
                     Text(
-                        if (resolved.isEmpty()) "Aucun commentaire pour l'instant. Sélectionnez un passage du texte, puis touchez le bouton « Commenter »."
+                        if (resolved.isEmpty()) "Aucun commentaire pour l'instant. Sélectionne un passage du texte, puis touche le bouton « Commenter »."
                         else "Tous les commentaires sont réglés.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

@@ -9,6 +9,7 @@ import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Difference
+import androidx.compose.material.icons.filled.Diversity3
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.FileCopy
@@ -69,6 +70,7 @@ object Tools {
     const val NEW_DECK = "deck"
     const val OPEN_PDF = "pdf"
     const val OPEN_FILE = "open"
+    const val SHARED = "shared"
 
     val all: List<Tool> = listOf(
         // ---------------------------------------------------------------- créer
@@ -95,6 +97,15 @@ object Tools {
             Icons.Filled.AutoAwesome, ToolCategory.CREATE, route = "templates",
             keywords = listOf("cv", "curriculum", "motivation", "facture", "devis", "budget", "résiliation", "attestation", "compte rendu"),
             tint = Color(0xFF0891B2)
+        ),
+        Tool(
+            SHARED, "Édition partagée", "Écrire à plusieurs, en direct",
+            Icons.Filled.Diversity3, ToolCategory.CREATE, route = "shared",
+            keywords = listOf(
+                "collaborer", "collaboratif", "ensemble", "à plusieurs", "temps réel", "en direct", "en ligne",
+                "google docs", "co-édition", "inviter", "équipe", "commenter", "partagé"
+            ),
+            tint = Color(0xFF0EA5E9)
         ),
         Tool(
             "mailmerge", "Courriers en série", "Un modèle, une liste : un courrier chacun",
