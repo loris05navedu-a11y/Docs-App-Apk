@@ -37,36 +37,36 @@ class OtClient(revision: Int, private val listener: Listener) {
     var state: State = State.Synchronized
         private set
 
+    // L'état change toujours avant d'appeler [listener] : une réponse qui
+    // arriverait pendant l'appel trouve l'état à jour.
+
     /** Une frappe sur cet appareil. */
     fun applyClient(operation: TextOperation) {
-        state = when (val s = state) {
+        when (val s = state) {
             State.Synchronized -> {
+                state = State.AwaitingConfirm(operation)
                 listener.sendOperation(revision, operation)
-                State.AwaitingConfirm(operation)
             }
-            is State.AwaitingConfirm -> State.AwaitingWithBuffer(s.outstanding, operation)
-            is State.AwaitingWithBuffer -> State.AwaitingWithBuffer(s.outstanding, s.buffer.compose(operation))
+            is State.AwaitingConfirm -> state = State.AwaitingWithBuffer(s.outstanding, operation)
+            is State.AwaitingWithBuffer -> state = State.AwaitingWithBuffer(s.outstanding, s.buffer.compose(operation))
         }
     }
 
     /** Une révision des autres, dans l'ordre du journal. */
     fun applyServer(operation: TextOperation) {
         revision++
-        state = when (val s = state) {
-            State.Synchronized -> {
-                listener.applyOperation(operation)
-                State.Synchronized
-            }
+        when (val s = state) {
+            State.Synchronized -> listener.applyOperation(operation)
             is State.AwaitingConfirm -> {
                 val (outstanding, received) = TextOperation.transform(s.outstanding, operation)
+                state = State.AwaitingConfirm(outstanding)
                 listener.applyOperation(received)
-                State.AwaitingConfirm(outstanding)
             }
             is State.AwaitingWithBuffer -> {
                 val (outstanding, received) = TextOperation.transform(s.outstanding, operation)
                 val (buffer, forUs) = TextOperation.transform(s.buffer, received)
+                state = State.AwaitingWithBuffer(outstanding, buffer)
                 listener.applyOperation(forUs)
-                State.AwaitingWithBuffer(outstanding, buffer)
             }
         }
     }
@@ -74,12 +74,12 @@ class OtClient(revision: Int, private val listener: Listener) {
     /** Notre opération en vol est devenue la révision attendue. */
     fun serverAck() {
         revision++
-        state = when (val s = state) {
+        when (val s = state) {
             State.Synchronized -> error("Confirmation reçue alors que rien n'était en vol")
-            is State.AwaitingConfirm -> State.Synchronized
+            is State.AwaitingConfirm -> state = State.Synchronized
             is State.AwaitingWithBuffer -> {
+                state = State.AwaitingConfirm(s.buffer)
                 listener.sendOperation(revision, s.buffer)
-                State.AwaitingConfirm(s.buffer)
             }
         }
     }
@@ -94,5 +94,10 @@ class OtClient(revision: Int, private val listener: Listener) {
             is State.AwaitingConfirm -> listener.sendOperation(revision, s.outstanding)
             is State.AwaitingWithBuffer -> listener.sendOperation(revision, s.outstanding)
         }
+    }
+
+    /** Oublier ce qui est en vol ou en attente : on repart du texte du serveur. */
+    fun reset() {
+        state = State.Synchronized
     }
 }

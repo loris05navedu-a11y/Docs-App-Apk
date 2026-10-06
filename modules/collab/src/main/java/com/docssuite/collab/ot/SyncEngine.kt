@@ -33,7 +33,8 @@ interface RevisionLog {
  * intègre une à une, dans l'ordre des numéros. Une révision illisible
  * (donnée abîmée) compte comme « ne rien changer », pour tout le monde pareil.
  *
- * [onRemote] reçoit les opérations à appliquer au texte affiché ; il est
+ * [onRemote] reçoit les opérations à appliquer au texte affiché, avec
+ * l'appareil qui les a écrites (`null` si la révision est illisible) ; il est
  * appelé pendant [receive], jamais ailleurs.
  */
 class SyncEngine(
@@ -42,7 +43,7 @@ class SyncEngine(
     private val log: RevisionLog,
     startIndex: Int,
     startText: String,
-    private val onRemote: (TextOperation) -> Unit,
+    private val onRemote: (operation: TextOperation, author: String?) -> Unit,
     private val checkpointEvery: Int = 100
 ) {
     /** Le texte tel que le journal le donne, sans nos frappes encore en vol. */
@@ -51,6 +52,8 @@ class SyncEngine(
 
     private val received = HashMap<Int, Revision?>()
     private var sent: Pair<Int, TextOperation>? = null
+    private var author: String? = null
+    private var draining = false
 
     private val client = OtClient(startIndex, object : OtClient.Listener {
         override fun sendOperation(revision: Int, operation: TextOperation) {
@@ -58,7 +61,7 @@ class SyncEngine(
             log.append(revision, Revision(clientId, uid, operation))
         }
 
-        override fun applyOperation(operation: TextOperation) = onRemote(operation)
+        override fun applyOperation(operation: TextOperation) = onRemote(operation, author)
     })
 
     /** Le numéro de la prochaine révision attendue. */
@@ -72,14 +75,38 @@ class SyncEngine(
         if (!operation.isNoop) client.applyClient(operation)
     }
 
+    /**
+     * Oublier nos frappes pas encore dans le journal (quand on n'a plus le
+     * droit d'écrire) et revenir au texte du journal, qu'on renvoie.
+     */
+    fun discardLocal(): String {
+        client.reset()
+        sent = null
+        return serverText
+    }
+
     /** Une révision lue dans le journal ; `null` si elle est illisible. */
     fun receive(index: Int, revision: Revision?) {
         if (index < client.revision) return
         received[index] = revision
-        drain()
+        // Une révision qui arrive pendant qu'on en intègre d'autres attend son tour.
+        if (!draining) drain()
     }
 
     private fun drain() {
+        draining = true
+        try {
+            do {
+                val retry = integrate()
+                if (retry) client.serverRetry()
+            } while (retry || received.containsKey(client.revision))
+        } finally {
+            draining = false
+        }
+    }
+
+    /** Intègre les révisions qui se suivent ; vrai si notre envoi a perdu sa place. */
+    private fun integrate(): Boolean {
         var retry = false
         while (received.containsKey(client.revision)) {
             val index = client.revision
@@ -88,6 +115,7 @@ class SyncEngine(
                 ?: TextOperation.identity(serverText.length)
             serverText = operation.apply(serverText)
 
+            author = revision?.clientId
             val pending = sent
             if (pending != null && pending.first == index) {
                 sent = null
@@ -103,6 +131,6 @@ class SyncEngine(
                 client.applyServer(operation)
             }
         }
-        if (retry) client.serverRetry()
+        return retry
     }
 }

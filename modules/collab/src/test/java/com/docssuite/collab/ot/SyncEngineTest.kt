@@ -67,7 +67,8 @@ class SyncEngineTest {
             },
             startIndex = startIndex,
             startText = startText,
-            onRemote = { op ->
+            onRemote = { op, author ->
+                check(author != name) { "sa propre frappe lui revient comme une frappe d'ailleurs" }
                 text = op.apply(text)
                 caret = op.transformIndex(caret).coerceIn(0, text.length)
             },
@@ -236,6 +237,25 @@ class SyncEngineTest {
         a.type(random)
         settle(server, random)
         assertConverged(server, "révision illisible")
+    }
+
+    @Test
+    fun `sans droit d'ecrire, on oublie ses frappes et on suit le journal`() {
+        val random = Random(12)
+        val server = Server(random, 100)
+        val a = Device("a", server)
+        val b = Device("b", server)
+        server.clients.addAll(listOf(a, b))
+        a.type(random)
+        settle(server, random)
+        // b tape, mais ses écritures sont refusées : il n'est plus éditeur.
+        repeat(5) { b.type(random) }
+        server.pendingWrites.removeAll { it.second.clientId == "b" }
+        b.text = b.engine.discardLocal()
+        assertTrue(b.engine.synced)
+        repeat(20) { a.type(random) }
+        settle(server, random)
+        assertConverged(server, "lecture seule")
     }
 
     @Test
