@@ -122,6 +122,31 @@ class SharedDocsTest {
     }
 
     @Test
+    fun `un jeton pas encore a jour est rafraichi puis la creation reussit`() = runTest {
+        val server = MemoryServer(post = { block -> launch { block() } })
+        val accounts = FakeAccounts(signedIn = lea)
+        // Le serveur croit l'adresse non vérifiée jusqu'au premier rafraîchissement.
+        server.rules = { _, _, _ -> accounts.refreshes > 0 }
+        val docs = SharedDocs(accounts, server.device("lea"), null, this, heartbeatMillis = 0, keepOpenMillis = 0)
+        val id = docs.create("Plan", "Texte")
+        assertEquals(1, accounts.refreshes)
+        assertEquals("Plan", ((server.value("docs/$id/meta")) as Map<*, *>)["title"])
+    }
+
+    @Test
+    fun `un refus persistant dit quoi faire`() = runTest {
+        val server = MemoryServer(post = { block -> launch { block() } })
+        server.rules = { _, _, _ -> false }
+        val docs = SharedDocs(FakeAccounts(signedIn = lea), server.device("lea"), null, this, heartbeatMillis = 0, keepOpenMillis = 0)
+        try {
+            docs.create("Plan", "")
+            fail()
+        } catch (e: CollabException) {
+            assertTrue(e.message!!.contains("règles de sécurité"))
+        }
+    }
+
+    @Test
     fun `une adresse non verifiee ne cree rien`() = runTest {
         val phone = world()(lea.copy(verified = false))
         try {

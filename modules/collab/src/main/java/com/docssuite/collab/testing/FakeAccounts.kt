@@ -62,7 +62,11 @@ class FakeAccounts(
         state.value?.let { verificationsSent += it.email }
     }
 
+    /** Combien de fois le jeton a été rafraîchi. */
+    var refreshes = 0
+
     override suspend fun refresh(): Account? {
+        refreshes++
         val account = state.value ?: return null
         if (linkClicked && !account.verified) {
             val verified = account.copy(verified = true)

@@ -20,6 +20,10 @@ import kotlinx.coroutines.launch
  * @param keepOpenMillis combien de temps un document fermé reste branché, au
  *   cas où on le rouvre aussitôt (l'écran qui tourne, par exemple).
  */
+private const val DENIED_HELP =
+    "Le serveur refuse l'écriture. Ferme et rouvre l'application, puis réessaie. " +
+        "Si ça persiste, les règles de sécurité de la base ne sont sans doute pas encore mises en ligne (étape deploy.sh)."
+
 class SharedDocs(
     val accounts: Accounts,
     private val store: Store,
@@ -119,23 +123,35 @@ class SharedDocs(
         val me = verified()
         val clean = title.trim().take(120).ifEmpty { "Document sans titre" }
         val id = store.newKey()
-        attempt("Vérifie d'abord ton adresse e-mail.") {
-            store.update(
-                mapOf(
-                    "docs/$id/meta" to mapOf(
-                        "title" to clean,
-                        "ownerUid" to me.uid,
-                        "ownerName" to me.name.take(100),
-                        "ownerEmail" to me.email,
-                        "createdAt" to ServerTime,
-                    ),
-                    "docs/$id/members/${me.uid}" to mapOf("role" to Role.OWNER.key, "name" to me.name.take(100), "email" to me.email, "at" to ServerTime),
-                    "docs/$id/checkpoint" to mapOf("n" to 0, "text" to text),
-                    "userDocs/${me.uid}/$id" to true,
-                )
-            )
-        }
+        val writes = mapOf(
+            "docs/$id/meta" to mapOf(
+                "title" to clean,
+                "ownerUid" to me.uid,
+                "ownerName" to me.name.take(100),
+                "ownerEmail" to me.email,
+                "createdAt" to ServerTime,
+            ),
+            "docs/$id/members/${me.uid}" to mapOf("role" to Role.OWNER.key, "name" to me.name.take(100), "email" to me.email, "at" to ServerTime),
+            "docs/$id/checkpoint" to mapOf("n" to 0, "text" to text),
+            "userDocs/${me.uid}/$id" to true,
+        )
+        attempt(DENIED_HELP) { writeWithFreshToken(writes) }
         return id
+    }
+
+    /**
+     * Le serveur lit « adresse vérifiée » dans le jeton de connexion, qui ne
+     * change qu'au rafraîchissement : juste après la vérification, il peut
+     * encore dire le contraire. Sur un refus, on rafraîchit et on réessaie.
+     */
+    private suspend fun writeWithFreshToken(values: Map<String, Any?>) {
+        try {
+            store.update(values)
+        } catch (e: StoreException.PermissionDenied) {
+            runCatching { accounts.refresh() }
+            delay(1_500)
+            store.update(values)
+        }
     }
 
     /** Accepter une invitation : on entre dans le document avec le rôle donné. */
@@ -143,7 +159,7 @@ class SharedDocs(
         val me = verified()
         val key = emailKey(me.email)
         attempt("Cette invitation n'est plus valable : elle a pu être annulée ou modifiée.") {
-            store.update(
+            writeWithFreshToken(
                 mapOf(
                     "docs/${invitation.docId}/members/${me.uid}" to mapOf(
                         "role" to invitation.role.key,
