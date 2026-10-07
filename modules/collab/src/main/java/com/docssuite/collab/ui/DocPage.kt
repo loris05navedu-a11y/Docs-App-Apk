@@ -73,6 +73,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -87,6 +88,7 @@ import com.docssuite.fileformats.TextDocument
 import com.docssuite.fileformats.TextParagraph
 import com.docssuite.fileformats.TextRun
 import com.docssuite.texteditor.saveImportedTextDocument
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Le document partagé, en direct. */
@@ -196,11 +198,25 @@ internal fun DocPage(
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             when (val state = session.state) {
-                DocSession.State.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                DocSession.State.Loading -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                    var slow by remember { mutableStateOf(false) }
+                    LaunchedEffect(Unit) {
+                        delay(8_000)
+                        slow = true
+                    }
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         CircularProgressIndicator()
                         Spacer(Modifier.height(12.dp))
                         Text("Ouverture du document…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (slow) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "C'est long : vérifie ta connexion à Internet. Le document s'ouvrira dès qu'elle reviendra.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
                     }
                 }
                 is DocSession.State.Closed -> Closed(state.reason, session, onBack)

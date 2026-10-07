@@ -58,6 +58,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role as SemanticsRole
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.docssuite.collab.Collab
@@ -72,6 +73,7 @@ import com.docssuite.collab.cloud.SharedDocs
 import com.docssuite.core.DocType
 import com.docssuite.core.DocumentStorage
 import com.docssuite.texteditor.loadTextDocument
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Les pages de l'édition partagée. */
@@ -291,7 +293,23 @@ private fun HomePage(
             }
             when {
                 documents == null -> item {
-                    Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                    var slow by remember { mutableStateOf(false) }
+                    LaunchedEffect(Unit) {
+                        delay(8_000)
+                        slow = true
+                    }
+                    Column(Modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator()
+                        if (slow) {
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                "Connexion au serveur… Vérifie ta connexion à Internet.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                    }
                 }
                 documents.isEmpty() -> item {
                     Explanation(

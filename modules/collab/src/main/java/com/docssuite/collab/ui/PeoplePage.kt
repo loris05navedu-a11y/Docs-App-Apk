@@ -92,7 +92,7 @@ internal fun PeoplePage(session: DocSession, docs: SharedDocs, onBack: () -> Uni
         val subject = "Invitation à ${verb(invite.role)} « ${session.title} »"
         val body = "Bonjour,\n\nJe vous invite à ${verb(invite.role)} le document « ${session.title} » dans l'application DocsApp Suite.\n\n" +
             (if (link.isNotEmpty()) "Ouvrez ce lien sur votre téléphone Android :\n$link\n\n" else "") +
-            "Connectez-vous avec cette adresse (${invite.email}) : le document vous attend dans « Partagés avec moi ».\n\n${session.me.name}"
+            "Connectez-vous avec cette adresse (${invite.email}), puis ouvrez « Édition partagée » : l'invitation vous y attend.\n\n${session.me.name}"
         try {
             context.startActivity(mailIntent(invite.email, subject, body))
         } catch (e: ActivityNotFoundException) {

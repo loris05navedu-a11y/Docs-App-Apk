@@ -97,7 +97,7 @@ class DocSession internal constructor(
                 when {
                     error == null || disposed -> {}
                     error is StoreException.PermissionDenied -> writeDenied()
-                    else -> jobs += scope.launch {
+                    else -> background {
                         delay(2_000)
                         append(index, revision)
                     }
@@ -106,7 +106,7 @@ class DocSession internal constructor(
         }
 
         override fun saveCheckpoint(nextIndex: Int, text: String) {
-            jobs += scope.launch {
+            background {
                 runCatching { store.update(mapOf("docs/$docId/checkpoint" to mapOf("n" to nextIndex, "text" to text))) }
             }
         }
@@ -137,7 +137,7 @@ class DocSession internal constructor(
             // La déconnexion a effacé notre présence : on la remet.
             if (reconnected && state == State.Open) announce(force = true)
         }
-        jobs += scope.launch { load() }
+        background { load() }
     }
 
     private suspend fun load() {
@@ -171,7 +171,7 @@ class DocSession internal constructor(
             live.setCursor(it.clientId, it.anchor, it.caret)
         }
         announce(force = true)
-        if (heartbeatMillis > 0) jobs += scope.launch {
+        if (heartbeatMillis > 0) background {
             while (true) {
                 delay(heartbeatMillis)
                 announce(force = true)
@@ -195,7 +195,7 @@ class DocSession internal constructor(
         val now = store.serverNow()
         if (now - activityAt < 30_000) return
         activityAt = now
-        jobs += scope.launch {
+        background {
             runCatching {
                 store.update(mapOf("docs/$docId/activity" to mapOf("at" to ServerTime, "by" to me.uid, "name" to me.name.take(100))))
             }
@@ -207,12 +207,12 @@ class DocSession internal constructor(
         if (disposed || state != State.Open) return
         if (force) {
             published = null
-            jobs += scope.launch { writePresence(force = true) }
+            background { writePresence(force = true) }
             return
         }
         if (presenceScheduled) return
         presenceScheduled = true
-        jobs += scope.launch {
+        background {
             delay(150)
             presenceScheduled = false
             writePresence(force = false)
@@ -267,6 +267,13 @@ class DocSession internal constructor(
         notice = "Tu ne peux plus modifier ce document : tes dernières frappes n'ont pas été enregistrées."
     }
 
+    /** Une tâche liée au document, arrêtée avec lui ; oubliée dès qu'elle est finie. */
+    private fun background(block: suspend CoroutineScope.() -> Unit) {
+        val job = scope.launch(block = block)
+        jobs += job
+        job.invokeOnCompletion { jobs.remove(job) }
+    }
+
     private fun watch(path: String, onValue: (Any?) -> Unit) {
         registrations += store.watch(path, onValue) { close("Tu n'as plus accès à ce document.") }
     }
@@ -287,7 +294,7 @@ class DocSession internal constructor(
     private fun stop() {
         registrations.forEach { it.remove() }
         registrations.clear()
-        jobs.forEach { it.cancel() }
+        jobs.toList().forEach { it.cancel() }
         jobs.clear()
         store.cancelOnDisconnect(presencePath)
         if (!disposed) scope.launch { runCatching { store.update(mapOf(presencePath to null)) } }
